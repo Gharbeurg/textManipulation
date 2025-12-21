@@ -41,7 +41,7 @@ import os
 
 
 #variables
-INPUT_FILE = Path("D:/CODING/.params/bpco.pdf")
+INPUT_FILE = Path("D:/CODING/.data/Google_recherche_resultat.txt")
 OUTPUT_FILE = Path("D:/CODING/.data/fichierTravail.txt")
 WORKDIR = Path("D:/CODING/.travail")
 
