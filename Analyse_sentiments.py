@@ -8,7 +8,7 @@ from nltk.tokenize import sent_tokenize
 from pathlib import Path
 
 # variables
-INPUT_FILE = Path("D:/CODING/.params/entree.txt")
+INPUT_FILE = Path("C:/PYTHON/.params/entree.txt")
 
 def lire_fichier(chemin):
     """

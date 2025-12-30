@@ -12,8 +12,8 @@ from datetime import datetime
 # =========================
 # Variables à modifier
 # =========================
-INPUT_FILE = Path(r"D:/CODING/.params/entree.txt")
-OUTPUT_CSV = Path(r"D:/CODING/.data/expressions_frequentes.csv")
+INPUT_FILE = Path(r"C:/PYTHON/.params/entree.txt")
+OUTPUT_CSV = Path(r"C:/PYTHON/.data/expressions_frequentes.csv")
 
 # Groupes de mots à analyser (2 = bigrammes, 3 = trigrammes)
 NGRAM_SIZES = (2, 3)

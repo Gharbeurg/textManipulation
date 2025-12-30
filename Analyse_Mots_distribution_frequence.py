@@ -12,8 +12,8 @@ from collections import Counter
 from datetime import datetime
 
 # variables
-fichier_entree = "D:/CODING/.params/entree.txt"
-fichier_sortie = "D:/CODING/.data/resultat.csv"
+fichier_entree = "C:/PYTHON/.params/entree.txt"
+fichier_sortie = "C:/PYTHON/.data/resultat.csv"
 
 # Charger le modèle français
 nlp = spacy.load("fr_core_news_sm")

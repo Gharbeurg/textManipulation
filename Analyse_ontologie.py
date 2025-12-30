@@ -37,11 +37,11 @@ from datetime import datetime
 # PARAMÈTRES (à modifier ici)
 # =========================================================
 
-ONTOLOGY_FILE = Path("D:/CODING/.params/ontologie_medicale_fr.yaml")  # ontologie YAML (structure plate)
-#ONTOLOGY_FILE = Path("D:/CODING/.params/ontologie_medicale_en.yaml")  # ontologie YAML (structure plate)
+ONTOLOGY_FILE = Path("C:/PYTHON/.params/ontologie_medicale_fr.yaml")  # ontologie YAML (structure plate)
+#ONTOLOGY_FILE = Path("C:/PYTHON/.params/ontologie_medicale_en.yaml")  # ontologie YAML (structure plate)
 
-INPUT_FILE = Path("D:/CODING/.params/entree.txt")                  # fichier texte à classer (txt/md)
-OUTDIR = Path("D:/CODING/.data/")                                  # dossier de sortie
+INPUT_FILE = Path("C:/PYTHON/.entree/entree.txt")                  # fichier texte à classer (txt/md)
+OUTDIR = Path("C:/PYTHON/.data/")                                  # dossier de sortie
 
 MIN_SCORE = 1            # nb minimal de mots-clés trouvés pour garder une catégorie
 ALLOW_MULTI = True       # True = une phrase peut avoir plusieurs catégories

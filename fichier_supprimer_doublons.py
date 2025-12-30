@@ -10,8 +10,8 @@ from datetime import datetime
 
 # Variables fichiers entrée / sortie
 # variables
-fichier_entree = "D:/CODING/.params/entree.txt"
-fichier_sortie = "D:/CODING/.data/entree_ss_doublon.txt"
+fichier_entree = "C:/PYTHON/.params/entree.txt"
+fichier_sortie = "C:/PYTHON/.data/entree_ss_doublon.txt"
 
 # URL simple (http/https)
 URL_RE = re.compile(r"https?://[^\s]+")

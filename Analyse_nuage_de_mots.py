@@ -23,8 +23,8 @@ import matplotlib.pyplot as plt
 # PARAMÈTRES À MODIFIER ICI
 # ============================================================
 
-INPUT_FILE = "D:/CODING/.params/entree.txt"
-OUTPUT_FILE = "D:/CODING/.params/nuage_mots.png"
+INPUT_FILE = "C:/PYTHON/.params/entree.txt"
+OUTPUT_FILE = "C:/PYTHON/.params/nuage_mots.png"
 
 FORME = "carre"          # "carre", "rond", "ovale", "none"
 LARGEUR = 1200

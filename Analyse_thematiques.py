@@ -28,8 +28,8 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 
 
 # ========= PARAMÈTRES À MODIFIER =========
-INPUT_FILE = Path(r"D:/CODING/.params/entree.txt")
-OUTPUT_DIR = Path(r"D:/CODING/.data/sorties_thematiques.txt")
+INPUT_FILE = Path(r"C:/PYTHON/.params/entree.txt")
+OUTPUT_DIR = Path(r"C:/PYTHON/.data/sorties_thematiques.txt")
 
 NB_TOPICS = 8                 # ex: 5, 8, 12 (plus grand = sujets plus fins)
 TOP_WORDS_PER_TOPIC = 12      # nb de mots-clés affichés par sujet

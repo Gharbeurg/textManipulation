@@ -3,8 +3,8 @@ import re, string
 from datetime import datetime
 
 # Variables
-fichier_entree = "D:/CODING/.params/entree.txt"
-fichier_sortie = "D:/CODING/.data/entree.txt"
+fichier_entree = "C:/PYTHON/.params/entree.txt"
+fichier_sortie = "C:/PYTHON/.data/entree.txt"
 lignes_max_par_fichier = 2000000
 fileNumber = 1
 

@@ -41,9 +41,9 @@ import os
 
 
 #variables
-INPUT_FILE = Path("D:/CODING/.data/Google_recherche_resultat.txt")
-OUTPUT_FILE = Path("D:/CODING/.data/fichierTravail.txt")
-WORKDIR = Path("D:/CODING/.travail")
+INPUT_FILE = Path("C:/PYTHON/.entree/pneumo.html")
+OUTPUT_FILE = Path("C:/PYTHON/.data/fichierTravail.txt")
+WORKDIR = Path("C:/PYTHON/.travail")
 
 FORCE_RECALCUL = False                             # True = recalculer toutes les étapes
 TARGET_LANGUAGE = None                             # ex: "fr", "en", ou None
