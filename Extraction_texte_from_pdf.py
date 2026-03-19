@@ -1,85 +1,62 @@
-"""
-Extraction "propre" de texte depuis un PDF (sans numéros de page, en-têtes/pieds répétitifs)
-- Fonctionne bien pour les PDF "texte" (pas scannés).
-- Si le PDF est scanné (images), il faudra un OCR (non inclus ici).
-
-Dépendance :
-    pip install pymupdf
-"""
-
 import re
 import fitz  # PyMuPDF
 from pathlib import Path
 from collections import Counter
 
 # =========================
-# PARAMÈTRES (à ajuster)
+# PARAMÈTRES
 # =========================
 
-INPUT_PDF = "C:/PYTHON/.entree/ETP_crohn.pdf"
-OUTPUT_TXT = "C:/PYTHON/.data/ETPcrohn.txt"
+PDF_DIR = Path(r"C:/PYTHON/.entree/Sources")
+PDF_DIR_OUT = Path(r"C:/PYTHON/.data/ResultatsPDF")
 
-# On ignore le haut/bas de page (souvent en-têtes/pieds)
-TOP_MARGIN_RATIO = 0.10      # 0.08 à 0.15 recommandé
-BOTTOM_MARGIN_RATIO = 0.10   # 0.08 à 0.15 recommandé
+TOP_MARGIN_RATIO = 0.10
+BOTTOM_MARGIN_RATIO = 0.10
+REPEAT_LINE_MIN_PAGES_RATIO = 0.40
 
-# Filtrage de lignes répétées entre pages (en-têtes/pieds typiques)
-REPEAT_LINE_MIN_PAGES_RATIO = 0.40  # si une ligne apparaît sur >= 40% des pages => on la supprime
-
-# Filtrage des numéros de page (et variantes)
 REMOVE_PAGE_NUMBER_LINES = True
-
-# Nettoyage typographique
-FIX_HYPHENATION = True       # recolle "trans-\nform" => "transform"
-JOIN_WRAPPED_LINES = True    # recolle les lignes coupées (mise en page)
-MIN_LINE_LEN = 2             # ignore les lignes très courtes (bruit)
-
+FIX_HYPHENATION = True
+JOIN_WRAPPED_LINES = True
+MIN_LINE_LEN = 2
 
 # =========================
-# OUTILS DE NETTOYAGE
+# OUTILS
 # =========================
 
 _page_number_patterns = [
-    re.compile(r"^\s*\d+\s*$"),                              # "12"
-    re.compile(r"^\s*page\s*\d+\s*$", re.I),                 # "Page 12"
-    re.compile(r"^\s*\d+\s*/\s*\d+\s*$"),                    # "12/48"
-    re.compile(r"^\s*-\s*\d+\s*-\s*$"),                      # "- 12 -"
-    re.compile(r"^\s*\d+\s*of\s*\d+\s*$", re.I),             # "12 of 48"
-    re.compile(r"^\s*page\s*\d+\s*of\s*\d+\s*$", re.I),      # "Page 12 of 48"
+    re.compile(r"^\s*\d+\s*$"),
+    re.compile(r"^\s*page\s*\d+\s*$", re.I),
+    re.compile(r"^\s*\d+\s*/\s*\d+\s*$"),
+    re.compile(r"^\s*-\s*\d+\s*-\s*$"),
+    re.compile(r"^\s*\d+\s*of\s*\d+\s*$", re.I),
+    re.compile(r"^\s*page\s*\d+\s*of\s*\d+\s*$", re.I),
 ]
 
 def looks_like_page_number(line: str) -> bool:
     if not REMOVE_PAGE_NUMBER_LINES:
         return False
     s = line.strip()
-    for p in _page_number_patterns:
-        if p.match(s):
-            return True
-    return False
+    return any(p.match(s) for p in _page_number_patterns)
 
 def normalize_line(line: str) -> str:
-    # Normalisation légère pour comparer les répétitions
     s = line.strip()
     s = re.sub(r"\s+", " ", s)
     return s
 
 def cleanup_block_text(text: str) -> str:
-    # Nettoyage basique des espaces
-    text = text.replace("\u00ad", "")  # soft hyphen
+    text = text.replace("\u00ad", "")
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
-
 # =========================
-# EXTRACTION PRINCIPALE
+# EXTRACTION
 # =========================
 
-def extract_text_clean(pdf_path: str) -> str:
+def extract_text_clean(pdf_path: Path) -> str:
     doc = fitz.open(pdf_path)
     n_pages = doc.page_count
 
-    # 1) Extraction brute par page en ignorant haut/bas de page
     pages_lines = []
     normalized_counts = Counter()
 
@@ -94,25 +71,18 @@ def extract_text_clean(pdf_path: str) -> str:
             rect.y1 - rect.height * BOTTOM_MARGIN_RATIO
         )
 
-        # get_text("text") donne du texte en lignes. clip retire marges.
         raw = page.get_text("text", clip=clip)
-
-        # Split en lignes, nettoyage minimal
         lines = [normalize_line(ln) for ln in raw.splitlines()]
-        # Retire lignes vides / trop courtes
         lines = [ln for ln in lines if ln and len(ln) >= MIN_LINE_LEN]
 
-        # Compte des lignes normalisées pour repérer les répétitions
         for ln in set(lines):
             normalized_counts[ln] += 1
 
         pages_lines.append(lines)
 
-    # 2) Détecter les lignes répétées sur beaucoup de pages (en-têtes/pieds typiques)
     repeated_threshold = max(2, int(n_pages * REPEAT_LINE_MIN_PAGES_RATIO))
     repeated_lines = {ln for ln, c in normalized_counts.items() if c >= repeated_threshold}
 
-    # 3) Filtrer lignes répétées + numéros de page + bruit
     cleaned_pages = []
     for lines in pages_lines:
         out = []
@@ -124,18 +94,12 @@ def extract_text_clean(pdf_path: str) -> str:
             out.append(ln)
         cleaned_pages.append(out)
 
-    # 4) Reconstituer le texte (avec corrections optionnelles)
-    # On sépare les pages par une ligne vide pour garder un minimum de structure.
     text = "\n\n".join("\n".join(lines) for lines in cleaned_pages).strip()
 
     if FIX_HYPHENATION:
-        # "trans-\nform" => "transform"
         text = re.sub(r"(\w)-\n(\w)", r"\1\2", text)
 
     if JOIN_WRAPPED_LINES:
-        # Heuristique : recoller les sauts de ligne "mise en page" au sein d'un paragraphe.
-        # On garde les doubles sauts de ligne (paragraphes).
-        # On recolle si la ligne ne finit pas par ponctuation forte.
         def join_paragraph(p: str) -> str:
             lines = p.split("\n")
             out = []
@@ -147,7 +111,6 @@ def extract_text_clean(pdf_path: str) -> str:
                     out.append(ln)
                     continue
                 prev = out[-1]
-                # si la ligne précédente ne termine pas par . ! ? : ; et que la nouvelle commence par minuscule
                 if (not re.search(r"[.!?:;]$", prev)) and re.match(r"^[a-zàâçéèêëîïôûùüÿñæœ]", ln):
                     out[-1] = prev + " " + ln
                 else:
@@ -158,25 +121,44 @@ def extract_text_clean(pdf_path: str) -> str:
         parts = [join_paragraph(p) for p in parts]
         text = "\n\n".join(parts)
 
-    text = cleanup_block_text(text)
-    return text
+    return cleanup_block_text(text)
 
+# =========================
+# TRAITEMENT DE TOUS LES PDF
+# =========================
 
-def main():
-    text = extract_text_clean(INPUT_PDF)
+def process_all_pdfs():
+    PDF_DIR_OUT.mkdir(parents=True, exist_ok=True)
 
-    # Si quasiment rien n'est extrait, le PDF est probablement scanné (image)
-    if len(text.strip()) < 50:
-        warning = (
-            "ATTENTION : très peu de texte extrait.\n"
-            "Le PDF est peut-être scanné (image). Dans ce cas, il faut un OCR.\n\n"
-        )
-        text = warning + text
+    pdf_files = list(PDF_DIR.glob("*.pdf"))
 
-    Path(OUTPUT_TXT).write_text(text, encoding="utf-8")
-    print("Texte extrait écrit dans :", OUTPUT_TXT)
-    print("Taille (caractères) :", len(text))
+    if not pdf_files:
+        print("Aucun PDF trouvé dans le dossier.")
+        return
 
+    for pdf_path in pdf_files:
+        print(f"Traitement : {pdf_path.name}")
+
+        try:
+            text = extract_text_clean(pdf_path)
+
+            if len(text.strip()) < 50:
+                text = (
+                    "ATTENTION : très peu de texte extrait.\n"
+                    "Le PDF est peut-être scanné (image). OCR nécessaire.\n\n"
+                ) + text
+
+            output_file = PDF_DIR_OUT / (pdf_path.stem + ".txt")
+            output_file.write_text(text, encoding="utf-8")
+
+            print(f"→ OK : {output_file.name}")
+
+        except Exception as e:
+            print(f"Erreur avec {pdf_path.name} : {e}")
+
+# =========================
+# MAIN
+# =========================
 
 if __name__ == "__main__":
-    main()
+    process_all_pdfs()
