@@ -1,164 +1,196 @@
+# -*- coding: utf-8 -*-
+
+from pathlib import Path
+from datetime import datetime
 import re
 import fitz  # PyMuPDF
-from pathlib import Path
-from collections import Counter
-
-# =========================
-# PARAMÈTRES
-# =========================
 
 PDF_DIR = Path(r"C:/PYTHON/.entree/Sources")
-PDF_DIR_OUT = Path(r"C:/PYTHON/.data/ResultatsPDF")
+TXT_DIR_OUT = Path(r"C:/PYTHON/.data/ResultatsPDF")
 
-TOP_MARGIN_RATIO = 0.10
-BOTTOM_MARGIN_RATIO = 0.10
-REPEAT_LINE_MIN_PAGES_RATIO = 0.40
+# ===============================
+# LOG
+# ===============================
 
-REMOVE_PAGE_NUMBER_LINES = True
-FIX_HYPHENATION = True
-JOIN_WRAPPED_LINES = True
-MIN_LINE_LEN = 2
+def log(msg):
+    print(f"{datetime.now().strftime('%H:%M:%S')} - {msg}")
 
-# =========================
-# OUTILS
-# =========================
 
-_page_number_patterns = [
-    re.compile(r"^\s*\d+\s*$"),
-    re.compile(r"^\s*page\s*\d+\s*$", re.I),
-    re.compile(r"^\s*\d+\s*/\s*\d+\s*$"),
-    re.compile(r"^\s*-\s*\d+\s*-\s*$"),
-    re.compile(r"^\s*\d+\s*of\s*\d+\s*$", re.I),
-    re.compile(r"^\s*page\s*\d+\s*of\s*\d+\s*$", re.I),
-]
+# ===============================
+# FILTRES INTELLIGENTS
+# ===============================
 
-def looks_like_page_number(line: str) -> bool:
-    if not REMOVE_PAGE_NUMBER_LINES:
-        return False
-    s = line.strip()
-    return any(p.match(s) for p in _page_number_patterns)
+def is_metadata_line(text):
+    t = text.lower()
 
-def normalize_line(line: str) -> str:
-    s = line.strip()
-    s = re.sub(r"\s+", " ", s)
-    return s
+    patterns = [
+        "doi",
+        "http",
+        "www.",
+        "copyright",
+        "all rights reserved",
+        "licensed under",
+        "peer reviewed version",
+        "correspondence",
+        "email:",
+    ]
 
-def cleanup_block_text(text: str) -> str:
-    text = text.replace("\u00ad", "")
-    text = re.sub(r"[ \t]+\n", "\n", text)
+    return any(p in t for p in patterns)
+
+
+def is_reference_line(text):
+    return bool(re.match(r"^\[\d+\]|^[A-Z][a-z]+, [A-Z]\.", text))
+
+
+def is_equation(text):
+    return bool(re.search(r"[=<>±∑∫]", text))
+
+
+def is_table_complex(text):
+    # table très technique (factor loadings, coefficients, etc.)
+    keywords = ["loading", "coefficient", "regression", "std.", "p-value"]
+    return any(k in text.lower() for k in keywords)
+
+
+def is_short_noise(text):
+    return len(text) < 40 and text.isupper()
+
+
+# ===============================
+# EXTRACTION SIMPLE
+# ===============================
+
+def extract_text_blocks(pdf_path):
+    doc = fitz.open(pdf_path)
+    full_text = []
+
+    for page in doc:
+        blocks = page.get_text("blocks")
+
+        # tri lecture naturelle
+        blocks.sort(key=lambda b: (b[1], b[0]))
+
+        for b in blocks:
+            text = b[4].strip()
+            if text:
+                full_text.append(text)
+
+    return "\n".join(full_text)
+
+
+# ===============================
+# NETTOYAGE PRINCIPAL
+# ===============================
+
+def clean_text(text):
+
+    lines = text.split("\n")
+    cleaned = []
+
+    seen_abstract = False
+    in_references = False
+
+    for line in lines:
+        l = line.strip()
+
+        if not l:
+            continue
+
+        # STOP REFERENCES
+        if re.match(r"references|bibliography", l, re.I):
+            break
+
+        # METADATA
+        if is_metadata_line(l):
+            continue
+
+        # REFERENCES lignes individuelles
+        if is_reference_line(l):
+            continue
+
+        # EQUATIONS
+        if is_equation(l):
+            continue
+
+        # NOISE
+        if is_short_noise(l):
+            continue
+
+        # ABSTRACT doublon
+        if re.match(r"abstract", l, re.I):
+            if seen_abstract:
+                continue
+            seen_abstract = True
+            cleaned.append("ABSTRACT")
+            continue
+
+        # SUMMARY => ABSTRACT
+        if re.match(r"summary", l, re.I):
+            cleaned.append("ABSTRACT")
+            continue
+
+        # TABLE
+        if re.match(r"table", l, re.I):
+            cleaned.append(f"TABLE: {l}")
+            continue
+
+        # FIGURE supprimée
+        if re.match(r"(figure|fig\.)", l, re.I):
+            continue
+
+        # TABLE complexe
+        if is_table_complex(l):
+            continue
+
+        cleaned.append(l)
+
+    return "\n".join(cleaned)
+
+
+# ===============================
+# FINAL CLEAN
+# ===============================
+
+def normalize(text):
     text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"[ \t]+", " ", text)
     return text.strip()
 
-# =========================
-# EXTRACTION
-# =========================
 
-def extract_text_clean(pdf_path: Path) -> str:
-    doc = fitz.open(pdf_path)
-    n_pages = doc.page_count
+# ===============================
+# PIPELINE
+# ===============================
 
-    pages_lines = []
-    normalized_counts = Counter()
+def process_pdf(pdf_path):
 
-    for i in range(n_pages):
-        page = doc.load_page(i)
-        rect = page.rect
+    log(f"Processing {pdf_path.name}")
 
-        clip = fitz.Rect(
-            rect.x0,
-            rect.y0 + rect.height * TOP_MARGIN_RATIO,
-            rect.x1,
-            rect.y1 - rect.height * BOTTOM_MARGIN_RATIO
-        )
+    raw = extract_text_blocks(pdf_path)
+    cleaned = clean_text(raw)
+    final = normalize(cleaned)
 
-        raw = page.get_text("text", clip=clip)
-        lines = [normalize_line(ln) for ln in raw.splitlines()]
-        lines = [ln for ln in lines if ln and len(ln) >= MIN_LINE_LEN]
+    out_path = TXT_DIR_OUT / f"{pdf_path.stem}.txt"
+    TXT_DIR_OUT.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(final, encoding="utf-8")
 
-        for ln in set(lines):
-            normalized_counts[ln] += 1
+    log(f"Saved → {out_path}")
 
-        pages_lines.append(lines)
 
-    repeated_threshold = max(2, int(n_pages * REPEAT_LINE_MIN_PAGES_RATIO))
-    repeated_lines = {ln for ln, c in normalized_counts.items() if c >= repeated_threshold}
-
-    cleaned_pages = []
-    for lines in pages_lines:
-        out = []
-        for ln in lines:
-            if ln in repeated_lines:
-                continue
-            if looks_like_page_number(ln):
-                continue
-            out.append(ln)
-        cleaned_pages.append(out)
-
-    text = "\n\n".join("\n".join(lines) for lines in cleaned_pages).strip()
-
-    if FIX_HYPHENATION:
-        text = re.sub(r"(\w)-\n(\w)", r"\1\2", text)
-
-    if JOIN_WRAPPED_LINES:
-        def join_paragraph(p: str) -> str:
-            lines = p.split("\n")
-            out = []
-            for ln in lines:
-                ln = ln.strip()
-                if not ln:
-                    continue
-                if not out:
-                    out.append(ln)
-                    continue
-                prev = out[-1]
-                if (not re.search(r"[.!?:;]$", prev)) and re.match(r"^[a-zàâçéèêëîïôûùüÿñæœ]", ln):
-                    out[-1] = prev + " " + ln
-                else:
-                    out.append(ln)
-            return "\n".join(out)
-
-        parts = text.split("\n\n")
-        parts = [join_paragraph(p) for p in parts]
-        text = "\n\n".join(parts)
-
-    return cleanup_block_text(text)
-
-# =========================
-# TRAITEMENT DE TOUS LES PDF
-# =========================
-
-def process_all_pdfs():
-    PDF_DIR_OUT.mkdir(parents=True, exist_ok=True)
-
-    pdf_files = list(PDF_DIR.glob("*.pdf"))
-
-    if not pdf_files:
-        print("Aucun PDF trouvé dans le dossier.")
-        return
-
-    for pdf_path in pdf_files:
-        print(f"Traitement : {pdf_path.name}")
-
-        try:
-            text = extract_text_clean(pdf_path)
-
-            if len(text.strip()) < 50:
-                text = (
-                    "ATTENTION : très peu de texte extrait.\n"
-                    "Le PDF est peut-être scanné (image). OCR nécessaire.\n\n"
-                ) + text
-
-            output_file = PDF_DIR_OUT / (pdf_path.stem + ".txt")
-            output_file.write_text(text, encoding="utf-8")
-
-            print(f"→ OK : {output_file.name}")
-
-        except Exception as e:
-            print(f"Erreur avec {pdf_path.name} : {e}")
-
-# =========================
+# ===============================
 # MAIN
-# =========================
+# ===============================
+
+def main():
+
+    log("START")
+
+    pdfs = list(PDF_DIR.glob("*.pdf"))
+
+    for pdf in pdfs:
+        process_pdf(pdf)
+
+    log("DONE")
+
 
 if __name__ == "__main__":
-    process_all_pdfs()
+    main()

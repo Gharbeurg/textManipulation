@@ -2,65 +2,84 @@ from __future__ import annotations
 
 import re
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import List, Dict, Optional
 
 import requests
 
+
 # ============================================================
-# CONFIGURATION
+# PARAMETRES GENERAUX
 # ============================================================
 
 TXT_DIR = Path(r"C:/PYTHON/.entree/Sources")
 OUTPUT_FILE = Path(r"C:/PYTHON/.data/Synthèse.txt")
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
+OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
 MODEL_NAME = "qwen3:8b"
 
-REQUEST_TIMEOUT = 1800
-SEPARATOR = "\n--------------------------------------\n"
+REQUEST_TIMEOUT = 240
+OLLAMA_RETRIES = 2
 
-SECTION_MAX_CHARS = 16000
-SECTION_OVERLAP = 1200
+SECTION_MAX_CHARS = 9000
+SECTION_OVERLAP = 800
 
+MAX_EXTRACTED_IDEAS_PER_CHUNK = 12
 MAX_STRUCTURING_IDEAS = 10
 MAX_COMPLEMENTARY_IDEAS = 10
-MAX_MISSING_IDEAS = 3
+MAX_MISSING_IDEAS = 5
+
 
 # ============================================================
-# OUTILS DE BASE
+# LOGS
 # ============================================================
 
 def log(message: str) -> None:
-    print("{} - {}".format(datetime.now().strftime("%d/%m/%Y %H:%M:%S"), message), flush=True)
+    print(
+        "{} - {}".format(
+            datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+            message
+        ),
+        flush=True
+    )
+
+
+# ============================================================
+# FICHIERS
+# ============================================================
+
+def ensure_parent_dir(file_path: Path) -> None:
+    file_path.parent.mkdir(parents=True, exist_ok=True)
 
 
 def read_text_file(file_path: Path) -> str:
-    for enc in ["utf-8", "utf-8-sig", "cp1252", "latin-1"]:
-        try:
-            return file_path.read_text(encoding=enc).strip()
-        except UnicodeDecodeError:
-            continue
-    raise RuntimeError(f"Impossible de lire le fichier : {file_path}")
+    return file_path.read_text(encoding="utf-8", errors="ignore")
 
 
 def init_output_file() -> None:
-    OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ensure_parent_dir(OUTPUT_FILE)
     OUTPUT_FILE.write_text("", encoding="utf-8")
 
 
-def append_output_block(text: str, add_separator: bool) -> None:
-    OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+def append_output_block(text: str, add_separator: bool = False) -> None:
+    ensure_parent_dir(OUTPUT_FILE)
 
     with OUTPUT_FILE.open("a", encoding="utf-8") as f:
         if add_separator:
-            f.write(SEPARATOR)
+            f.write("\n" + "=" * 100 + "\n\n")
         f.write(text.strip() + "\n")
 
 
+# ============================================================
+# OUTILS TEXTE
+# ============================================================
+
 def normalize_spaces(text: str) -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = text.replace("\u00a0", " ")
+    text = text.replace("\u200b", "")
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
@@ -94,13 +113,30 @@ def keep_new_items(base_items: List[str], candidate_items: List[str]) -> List[st
     return result
 
 
+def split_into_sentences(text: str) -> List[str]:
+    text = normalize_spaces(text)
+    text = re.sub(r"\n+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+
+    if not text:
+        return []
+
+    parts = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])", text)
+    results = []
+
+    for part in parts:
+        part = part.strip(" -\t")
+        if part:
+            results.append(part)
+
+    return results
+
+
 # ============================================================
 # APPEL OLLAMA
 # ============================================================
 
-def call_ollama(prompt: str, model: str = MODEL_NAME) -> str:
-    log("Appel Ollama")
-
+def call_ollama(prompt: str, model: str = MODEL_NAME, num_predict: int = 2048) -> str:
     payload = {
         "model": model,
         "prompt": prompt,
@@ -108,340 +144,74 @@ def call_ollama(prompt: str, model: str = MODEL_NAME) -> str:
         "options": {
             "temperature": 0.0,
             "top_p": 0.9,
-            "num_predict": 4096,
+            "num_predict": num_predict,
         }
     }
 
-    try:
-        response = requests.post(OLLAMA_URL, json=payload, timeout=REQUEST_TIMEOUT)
-        response.raise_for_status()
-    except requests.RequestException as exc:
-        raise RuntimeError(f"Erreur lors de l'appel à Ollama : {exc}") from exc
+    response = requests.post(OLLAMA_URL, json=payload, timeout=REQUEST_TIMEOUT)
+    response.raise_for_status()
 
     data = response.json()
-    text = data.get("response", "").strip()
+    return data.get("response", "").strip()
 
-    if not text:
-        raise RuntimeError("Réponse vide de Ollama.")
 
-    log("Réponse Ollama reçue")
-    return text
+def safe_call_ollama(prompt: str, model: str = MODEL_NAME, num_predict: int = 2048) -> str:
+    last_error: Optional[Exception] = None
+
+    for attempt in range(1, OLLAMA_RETRIES + 2):
+        try:
+            log(f"Appel Ollama - tentative {attempt}")
+            text = call_ollama(prompt, model=model, num_predict=num_predict)
+
+            if text.strip():
+                log("Réponse Ollama reçue")
+                return text.strip()
+
+            last_error = RuntimeError("Réponse vide de Ollama.")
+
+        except Exception as exc:
+            last_error = exc
+
+        time.sleep(1.2)
+
+    log(f"Ollama indisponible ou réponse vide : {last_error}")
+    return ""
 
 
 # ============================================================
-# NORMALISATION EN ANGLAIS
+# PARSING DES LISTES
 # ============================================================
 
-def build_force_english_prompt(raw_text: str) -> str:
+def parse_bullet_list(raw_text: str) -> List[str]:
+    items: List[str] = []
+
+    for raw_line in raw_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        if re.match(r"^[-*•]\s+", line):
+            item = re.sub(r"^[-*•]\s+", "", line).strip()
+            if item:
+                items.append(item)
+            continue
+
+        if re.match(r"^\d+[.)]\s+", line):
+            item = re.sub(r"^\d+[.)]\s+", "", line).strip()
+            if item:
+                items.append(item)
+            continue
+
+    return dedupe_preserve_order(items)
+
+
+# ============================================================
+# PROMPTS
+# ============================================================
+
+def build_extract_prompt(doc_title: str, section_title: str, text: str) -> str:
     return f"""
-Rewrite the following content in English only.
-
-Rules:
-- Output only in English.
-- Keep the bullet list structure.
-- One idea per bullet line starting with "- ".
-- Do not add commentary.
-- Do not add titles.
-- Do not add explanations.
-- Do not invent anything.
-- If a bullet is already in English, keep it in English and improve only if needed.
-- If a bullet is in another language, translate it into natural English.
-- If the text contains mixed languages, normalize everything into English only.
-
-Text:
-\"\"\"
-{raw_text}
-\"\"\"
-""".strip()
-
-
-def normalize_bullets_to_english(items: List[str]) -> List[str]:
-    cleaned_items = [item.strip() for item in items if item.strip()]
-
-    if not cleaned_items:
-        return []
-
-    raw_text = "\n".join([f"- {item}" for item in cleaned_items])
-    prompt = build_force_english_prompt(raw_text)
-    raw = call_ollama(prompt)
-    english_items = parse_bullet_list(raw)
-
-    if not english_items:
-        return cleaned_items
-
-    return dedupe_preserve_order(english_items)
-
-
-# ============================================================
-# NETTOYAGE DU TEXTE
-# ============================================================
-
-EDITORIAL_START_PATTERNS = [
-    r"^provided in cooperation with:.*$",
-    r"^suggested citation:.*$",
-    r"^this version is available at:.*$",
-    r"^standard-nutzungsbedingungen:.*$",
-    r"^terms of use:.*$",
-    r"^received:\s.*$",
-    r"^revised:\s.*$",
-    r"^accepted:\s.*$",
-    r"^published:\s.*$",
-    r"^citation:\s.*$",
-    r"^copyright:\s.*$",
-    r"^licensee .*",
-    r"^this article is an open access article.*$",
-]
-
-CUT_FROM_PATTERNS = [
-    r"\nreferences\s*:\s*\n",
-    r"\nreferences\s*\n",
-    r"\nauthor contributions\s*:\s*\n",
-    r"\nfunding\s*:\s*\n",
-    r"\ninstitutional review board statement\s*:\s*\n",
-    r"\ninformed consent statement\s*:\s*\n",
-    r"\ndata availability statement\s*:\s*\n",
-    r"\nconflicts of interest\s*:\s*\n",
-    r"\ndisclaimer/publisher[’']?s note\s*:\s*\n",
-    r"\ndisclaimer\s*:\s*\n",
-]
-
-NOISE_LINE_PATTERNS = [
-    r"^\s*available online:\s*https?://.*$",
-    r"^\s*available at:\s*https?://.*$",
-    r"^\s*https?://\S+\s*$",
-    r"^\s*\[crossref\]\s*$",
-    r"^\s*\[pubmed\]\s*$",
-    r"^\s*\[crossref\]\s*\[pubmed\]\s*$",
-    r"^\s*doi:\s*.*$",
-    r"^\s*orcid:\s*.*$",
-    r"^\s*e-?mail:\s*.*$",
-    r"^\s*correspondence:\s*.*$",
-    r"^\s*submitted\s+\d{1,2}[/-]\d{1,2}[/-]\d{2,4}.*$",
-    r"^\s*accepted\s+\d{1,2}[/-]\d{1,2}[/-]\d{2,4}.*$",
-]
-
-
-def remove_editorial_header_lines(text: str) -> str:
-    lines = text.splitlines()
-    cleaned = []
-
-    for line in lines:
-        lower = line.strip().lower()
-        skip = False
-
-        for pattern in EDITORIAL_START_PATTERNS:
-            if re.match(pattern, lower, flags=re.IGNORECASE):
-                skip = True
-                break
-
-        if not skip:
-            cleaned.append(line)
-
-    return "\n".join(cleaned)
-
-
-def cut_from_first_match(text: str, patterns: List[str]) -> str:
-    lower_text = text.lower()
-    cut_positions = []
-
-    for pattern in patterns:
-        match = re.search(pattern, lower_text, flags=re.IGNORECASE)
-        if match:
-            cut_positions.append(match.start())
-
-    if cut_positions:
-        return text[:min(cut_positions)].strip()
-
-    return text.strip()
-
-
-def remove_noise_lines(text: str) -> str:
-    lines = text.splitlines()
-    cleaned = []
-
-    for line in lines:
-        skip = False
-        for pattern in NOISE_LINE_PATTERNS:
-            if re.match(pattern, line.strip(), flags=re.IGNORECASE):
-                skip = True
-                break
-        if not skip:
-            cleaned.append(line)
-
-    return "\n".join(cleaned)
-
-
-def clean_source_text(raw_text: str) -> str:
-    log("Nettoyage du texte brut")
-
-    text = normalize_spaces(raw_text)
-    text = cut_from_first_match(text, CUT_FROM_PATTERNS)
-    text = remove_editorial_header_lines(text)
-    text = remove_noise_lines(text)
-
-    text = re.sub(
-        r"\nTable\s+\d+\..*?(?=\n(?:[A-Z][^\n]{0,120}:|\d+\.\s+[A-Z]|[A-Z][a-z]+(?: [A-Z][a-z]+)*\n|\Z))",
-        "\n",
-        text,
-        flags=re.DOTALL
-    )
-    text = re.sub(
-        r"\nFigure\s+\d+\..*?(?=\n(?:[A-Z][^\n]{0,120}:|\d+\.\s+[A-Z]|[A-Z][a-z]+(?: [A-Z][a-z]+)*\n|\Z))",
-        "\n",
-        text,
-        flags=re.DOTALL
-    )
-
-    cleaned_lines = []
-    for line in text.splitlines():
-        stripped = line.strip()
-
-        if not stripped:
-            cleaned_lines.append("")
-            continue
-
-        if re.fullmatch(r"[\d\s,.\-%()]+", stripped):
-            continue
-
-        if len(stripped) <= 3 and re.fullmatch(r"[\d.%,-]+", stripped):
-            continue
-
-        cleaned_lines.append(line)
-
-    text = "\n".join(cleaned_lines)
-    text = normalize_spaces(text)
-
-    return text
-
-
-# ============================================================
-# DECOUPAGE PAR SECTIONS
-# ============================================================
-
-SECTION_TITLE_PATTERNS = [
-    r"^\d+(\.\d+)*\.\s+.+$",
-    r"^(abstract|introduction|literature review|research methodology|methodology|results|discussion|conclusions?|limitations?|future research directions?)\s*$",
-]
-
-
-def is_section_title(line: str) -> bool:
-    stripped = line.strip()
-    if not stripped:
-        return False
-
-    for pattern in SECTION_TITLE_PATTERNS:
-        if re.match(pattern, stripped, flags=re.IGNORECASE):
-            return True
-
-    return False
-
-
-def split_into_sections(text: str) -> List[dict]:
-    lines = text.splitlines()
-
-    sections = []
-    current_title = "Document"
-    current_lines: List[str] = []
-
-    found_title = False
-
-    for line in lines:
-        if is_section_title(line):
-            found_title = True
-            if current_lines:
-                sections.append({
-                    "title": current_title,
-                    "text": "\n".join(current_lines).strip()
-                })
-            current_title = line.strip()
-            current_lines = []
-        else:
-            current_lines.append(line)
-
-    if current_lines:
-        sections.append({
-            "title": current_title,
-            "text": "\n".join(current_lines).strip()
-        })
-
-    sections = [s for s in sections if s["text"].strip()]
-
-    if not found_title and sections:
-        return sections
-
-    return sections if sections else [{"title": "Document", "text": text.strip()}]
-
-
-def split_large_text(text: str, chunk_size: int = SECTION_MAX_CHARS, overlap: int = SECTION_OVERLAP) -> List[str]:
-    text = text.strip()
-    if len(text) <= chunk_size:
-        return [text]
-
-    chunks = []
-    start = 0
-    text_length = len(text)
-
-    while start < text_length:
-        target_end = min(start + chunk_size, text_length)
-        end = target_end
-
-        if target_end < text_length:
-            newline_pos = text.rfind("\n", start, target_end)
-            space_pos = text.rfind(" ", start, target_end)
-
-            if newline_pos > start + int(chunk_size * 0.6):
-                end = newline_pos
-            elif space_pos > start + int(chunk_size * 0.6):
-                end = space_pos
-
-        chunk = text[start:end].strip()
-        if chunk:
-            chunks.append(chunk)
-
-        if end >= text_length:
-            break
-
-        start = max(end - overlap, start + 1)
-
-    return chunks
-
-
-def build_section_chunks(clean_text: str) -> List[dict]:
-    log("Découpage en sections")
-    sections = split_into_sections(clean_text)
-
-    chunks = []
-
-    for section in sections:
-        section_title = section["title"]
-        section_text = section["text"]
-
-        if len(section_text) <= SECTION_MAX_CHARS:
-            chunks.append({
-                "section_title": section_title,
-                "text": section_text
-            })
-        else:
-            sub_chunks = split_large_text(section_text)
-            for i, sub_chunk in enumerate(sub_chunks, start=1):
-                chunks.append({
-                    "section_title": f"{section_title} [partie {i}/{len(sub_chunks)}]",
-                    "text": sub_chunk
-                })
-
-    return chunks
-
-
-# ============================================================
-# EXTRACTION DES IDEES
-# ============================================================
-
-def build_extract_prompt(doc_title: str, section_title: str, chunk_text: str) -> str:
-    return f"""
-You are reading an excerpt from a document.
-
-Task:
-extract the key ideas that are genuinely present in this excerpt.
+You analyze a document section and extract only the most important ideas.
 
 Rules:
 - Output in English only.
@@ -451,23 +221,17 @@ Rules:
 - No headings.
 - No introduction.
 - No conclusion.
-- Do not invent anything.
-- Do not include editorial metadata.
-- Do not include DOIs, licenses, copyright notices, or conflicts of interest.
-- Do not include bibliography titles.
-- Do not present references to other articles as if they were ideas of this document.
-- Keep only ideas useful for understanding this excerpt.
-- Give at most 8 ideas for this excerpt.
-- If the excerpt contains few ideas, output only the ideas that are really present.
-- If the excerpt contains no useful idea, respond exactly:
-- No useful idea in this excerpt.
+- No invented content.
+- Keep only the most meaningful ideas.
+- Avoid duplication.
+- Give at most {MAX_EXTRACTED_IDEAS_PER_CHUNK} ideas.
 
 Document title: {doc_title}
-Section: {section_title}
+Section title: {section_title}
 
-Text:
+Section text:
 \"\"\"
-{chunk_text}
+{text}
 \"\"\"
 """.strip()
 
@@ -476,7 +240,7 @@ def build_select_structuring_ideas_prompt(doc_title: str, all_ideas: List[str], 
     ideas_text = "\n".join([f"- {idea}" for idea in all_ideas])
 
     return f"""
-You receive a list of ideas extracted from different parts of the same document.
+You receive a list of ideas extracted from a document.
 
 Task:
 select the most structuring ideas needed to understand the document.
@@ -601,39 +365,532 @@ Full list of ideas:
 """.strip()
 
 
-def parse_bullet_list(raw_text: str) -> List[str]:
-    items: List[str] = []
+def build_force_english_prompt(raw_text: str) -> str:
+    return f"""
+Rewrite the following content in English only.
 
-    for raw_line in raw_text.splitlines():
+Rules:
+- Output only in English.
+- Keep the bullet list structure.
+- One idea per bullet line starting with "- ".
+- Do not add commentary.
+- Do not add titles.
+- Do not add explanations.
+- Do not invent anything.
+- If a bullet is already in English, keep it in English and improve only if needed.
+- If a bullet is in another language, translate it into natural English.
+- If the text contains mixed languages, normalize everything into English only.
+
+Text:
+\"\"\"
+{raw_text}
+\"\"\"
+""".strip()
+
+
+# ============================================================
+# NORMALISATION EN ANGLAIS
+# ============================================================
+
+def normalize_bullets_to_english(items: List[str]) -> List[str]:
+    cleaned_items = [item.strip() for item in items if item.strip()]
+    if not cleaned_items:
+        return []
+
+    raw_text = "\n".join([f"- {item}" for item in cleaned_items])
+    prompt = build_force_english_prompt(raw_text)
+    raw = safe_call_ollama(prompt, num_predict=1024)
+
+    if not raw:
+        return dedupe_preserve_order(cleaned_items)
+
+    english_items = parse_bullet_list(raw)
+    if not english_items:
+        return dedupe_preserve_order(cleaned_items)
+
+    return dedupe_preserve_order(english_items)
+
+
+# ============================================================
+# NETTOYAGE DU TEXTE
+# ============================================================
+
+EDITORIAL_START_PATTERNS = [
+    r"^provided in cooperation with:.*$",
+    r"^suggested citation:.*$",
+    r"^this version is available at:.*$",
+    r"^standard-nutzungsbedingungen:.*$",
+    r"^terms of use:.*$",
+    r"^received:\s.*$",
+    r"^revised:\s.*$",
+    r"^accepted:\s.*$",
+    r"^published:\s.*$",
+    r"^citation:\s.*$",
+    r"^copyright:\s.*$",
+    r"^licensee .*",
+    r"^this article is an open access article.*$",
+]
+
+NOISE_LINE_PATTERNS = [
+    r"^\s*available online:\s*https?://.*$",
+    r"^\s*available at:\s*https?://.*$",
+    r"^\s*https?://\S+\s*$",
+    r"^\s*\[crossref\]\s*$",
+    r"^\s*\[pubmed\]\s*$",
+    r"^\s*\[crossref\]\s*\[pubmed\]\s*$",
+    r"^\s*doi:\s*.*$",
+    r"^\s*orcid:\s*.*$",
+    r"^\s*e-?mail:\s*.*$",
+    r"^\s*correspondence:\s*.*$",
+    r"^\s*submitted\s+\d{1,2}[/-]\d{1,2}[/-]\d{2,4}.*$",
+    r"^\s*accepted\s+\d{1,2}[/-]\d{1,2}[/-]\d{2,4}.*$",
+]
+
+END_SECTION_PATTERNS = [
+    r"^\s*references\s*:?\s*$",
+    r"^\s*bibliography\s*:?\s*$",
+    r"^\s*endnotes\s*:?\s*$",
+    r"^\s*notes\s*:?\s*$",
+    r"^\s*author contributions\s*:?\s*$",
+    r"^\s*funding\s*:?\s*$",
+    r"^\s*institutional review board statement\s*:?\s*$",
+    r"^\s*informed consent statement\s*:?\s*$",
+    r"^\s*data availability statement\s*:?\s*$",
+    r"^\s*conflicts? of interest\s*:?\s*$",
+    r"^\s*acknowledg?ments?\s*:?\s*$",
+    r"^\s*appendix\s*:?\s*$",
+]
+
+EARLY_STOP_TITLES = {
+    "references",
+    "bibliography",
+    "endnotes",
+    "author contributions",
+    "funding",
+    "institutional review board statement",
+    "informed consent statement",
+    "data availability statement",
+    "conflicts of interest",
+    "conflict of interest",
+}
+
+def remove_editorial_header_lines(text: str) -> str:
+    lines = text.splitlines()
+    cleaned = []
+
+    for line in lines:
+        lower = line.strip().lower()
+        skip = False
+
+        for pattern in EDITORIAL_START_PATTERNS:
+            if re.match(pattern, lower, flags=re.IGNORECASE):
+                skip = True
+                break
+
+        if not skip:
+            cleaned.append(line)
+
+    return "\n".join(cleaned)
+
+
+def remove_noise_lines(text: str) -> str:
+    lines = text.splitlines()
+    cleaned = []
+
+    for line in lines:
+        skip = False
+
+        for pattern in NOISE_LINE_PATTERNS:
+            if re.match(pattern, line.strip(), flags=re.IGNORECASE):
+                skip = True
+                break
+
+        if not skip:
+            cleaned.append(line)
+
+    return "\n".join(cleaned)
+
+
+def find_end_cut_position(text: str) -> Optional[int]:
+    lines = text.splitlines()
+
+    if not lines:
+        return None
+
+    total_chars = len(text)
+    current_pos = 0
+
+    for line in lines:
+        stripped = line.strip()
+        lower = stripped.lower()
+
+        for pattern in END_SECTION_PATTERNS:
+            if re.match(pattern, stripped, flags=re.IGNORECASE):
+                ratio = current_pos / max(total_chars, 1)
+
+                if lower in EARLY_STOP_TITLES:
+                    if ratio >= 0.45:
+                        return current_pos
+                else:
+                    if ratio >= 0.65:
+                        return current_pos
+
+        current_pos += len(line) + 1
+
+    return None
+
+
+def merge_broken_lines(text: str) -> str:
+    lines = text.splitlines()
+    merged: List[str] = []
+    buffer = ""
+
+    def flush_buffer() -> None:
+        nonlocal buffer
+        if buffer.strip():
+            merged.append(buffer.strip())
+        buffer = ""
+
+    for raw_line in lines:
         line = raw_line.strip()
+
         if not line:
+            flush_buffer()
+            merged.append("")
             continue
 
-        if re.match(r"^[-*•]\s+", line):
-            item = re.sub(r"^[-*•]\s+", "", line).strip()
-            if item:
-                items.append(item)
+        if re.fullmatch(r"\d{1,4}", line):
+            continue
 
-    return items
+        if len(line) <= 2 and re.fullmatch(r"[-–•]", line):
+            flush_buffer()
+            merged.append(line)
+            continue
+
+        looks_like_title = is_section_title(line)
+
+        if looks_like_title:
+            flush_buffer()
+            merged.append(line)
+            continue
+
+        if not buffer:
+            buffer = line
+            continue
+
+        if buffer.endswith(("-", "–")):
+            buffer = buffer[:-1].rstrip() + line
+            continue
+
+        if re.search(r"[.:;!?)]$", buffer):
+            flush_buffer()
+            buffer = line
+            continue
+
+        if line[:1].islower():
+            buffer += " " + line
+            continue
+
+        if len(buffer) < 120:
+            buffer += " " + line
+            continue
+
+        flush_buffer()
+        buffer = line
+
+    flush_buffer()
+
+    text = "\n".join(merged)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
-def extract_from_chunks(doc_title: str, chunks: List[dict]) -> List[str]:
+def clean_source_text(raw_text: str) -> str:
+    log("Nettoyage du texte brut")
+
+    text = normalize_spaces(raw_text)
+    text = remove_editorial_header_lines(text)
+    text = remove_noise_lines(text)
+
+    cut_pos = find_end_cut_position(text)
+    if cut_pos is not None:
+        text = text[:cut_pos].strip()
+
+    text = re.sub(
+        r"\nTable\s+\d+.*?(?=\n(?:[A-Z][^\n]{0,120}:|\d+(?:\.\d+)*\.?\s+[A-Z]|[A-Z][a-z]+(?: [A-Z][a-z]+)*\n|\Z))",
+        "\n",
+        text,
+        flags=re.DOTALL
+    )
+
+    text = re.sub(
+        r"\nFigure\s+\d+.*?(?=\n(?:[A-Z][^\n]{0,120}:|\d+(?:\.\d+)*\.?\s+[A-Z]|[A-Z][a-z]+(?: [A-Z][a-z]+)*\n|\Z))",
+        "\n",
+        text,
+        flags=re.DOTALL
+    )
+
+    cleaned_lines = []
+
+    for line in text.splitlines():
+        stripped = line.strip()
+
+        if not stripped:
+            cleaned_lines.append("")
+            continue
+
+        if re.fullmatch(r"[\d\s,.\-%()/:]+", stripped):
+            continue
+
+        if len(stripped) <= 3 and re.fullmatch(r"[\d.%,-]+", stripped):
+            continue
+
+        if re.fullmatch(r"page \d+", stripped.lower()):
+            continue
+
+        cleaned_lines.append(line)
+
+    text = "\n".join(cleaned_lines)
+    text = merge_broken_lines(text)
+    text = normalize_spaces(text)
+
+    return text
+
+
+# ============================================================
+# DECOUPAGE PAR SECTIONS
+# ============================================================
+
+SECTION_TITLE_PATTERNS = [
+    r"^\d+(\.\d+)*\.\s+.+$",
+    r"^\d+(\.\d+)*\s+.+$",
+    r"^(abstract|introduction|executive summary|summary|foreword|background|context|method|methods|methodology|results|findings|discussion|conclusion|conclusions|implications|recommendations|limitations|future research directions?|appendix|acknowledg?ments?)\s*$",
+]
+
+def is_section_title(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+
+    if len(stripped) > 140:
+        return False
+
+    for pattern in SECTION_TITLE_PATTERNS:
+        if re.match(pattern, stripped, flags=re.IGNORECASE):
+            return True
+
+    return False
+
+
+def split_into_sections(text: str) -> List[Dict[str, str]]:
+    lines = text.splitlines()
+
+    sections: List[Dict[str, str]] = []
+    current_title = "Document"
+    current_lines: List[str] = []
+    found_title = False
+
+    for line in lines:
+        if is_section_title(line):
+            found_title = True
+
+            if current_lines:
+                sections.append({
+                    "title": current_title,
+                    "text": "\n".join(current_lines).strip()
+                })
+
+            current_title = line.strip()
+            current_lines = []
+        else:
+            current_lines.append(line)
+
+    if current_lines:
+        sections.append({
+            "title": current_title,
+            "text": "\n".join(current_lines).strip()
+        })
+
+    sections = [s for s in sections if s["text"].strip()]
+
+    if not sections:
+        return [{"title": "Document", "text": text.strip()}]
+
+    if not found_title:
+        return [{"title": "Document", "text": text.strip()}]
+
+    return sections
+
+
+def split_large_text(text: str, chunk_size: int = SECTION_MAX_CHARS, overlap: int = SECTION_OVERLAP) -> List[str]:
+    text = text.strip()
+
+    if not text:
+        return []
+
+    if len(text) <= chunk_size:
+        return [text]
+
+    chunks = []
+    start = 0
+    text_length = len(text)
+
+    while start < text_length:
+        target_end = min(start + chunk_size, text_length)
+
+        if target_end < text_length:
+            candidates = [
+                text.rfind("\n\n", start, target_end),
+                text.rfind(". ", start, target_end),
+                text.rfind("; ", start, target_end),
+            ]
+            candidates = [c for c in candidates if c > start + int(chunk_size * 0.55)]
+            end = max(candidates) if candidates else target_end
+        else:
+            end = target_end
+
+        chunk = text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+
+        if end >= text_length:
+            break
+
+        start = max(end - overlap, start + 1)
+
+    return chunks
+
+
+def build_section_chunks(text: str) -> List[Dict[str, str]]:
+    sections = split_into_sections(text)
+    chunks: List[Dict[str, str]] = []
+
+    for section in sections:
+        section_title = section["title"]
+        section_text = section["text"].strip()
+
+        if not section_text:
+            continue
+
+        sub_chunks = split_large_text(section_text)
+
+        for sub_chunk in sub_chunks:
+            if sub_chunk.strip():
+                chunks.append({
+                    "section_title": section_title,
+                    "text": sub_chunk.strip()
+                })
+
+    if not chunks and text.strip():
+        chunks.append({
+            "section_title": "Document",
+            "text": text.strip()
+        })
+
+    return chunks
+
+
+# ============================================================
+# MODE DE SECOURS SANS OLLAMA
+# ============================================================
+
+STOPWORDS = {
+    "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "with", "by",
+    "is", "are", "was", "were", "be", "been", "being", "that", "this", "these",
+    "those", "as", "at", "from", "it", "its", "their", "there", "than", "into",
+    "about", "across", "can", "could", "may", "might", "will", "would", "should",
+    "our", "we", "they", "them", "he", "she", "his", "her", "you", "your"
+}
+
+def looks_like_reference_fragment(text: str) -> bool:
+    low = text.lower()
+
+    if "doi" in low or "orcid" in low or "creativecommons" in low:
+        return True
+
+    if re.search(r"\b[a-zà-ÿ-]+ et al\b", low):
+        return True
+
+    if low.count(",") > 6 and len(low) < 220:
+        return True
+
+    if re.search(r"\bvol\.?\b|\bissue\b|\bjournal\b", low) and re.search(r"\b\d{4}\b", low):
+        return True
+
+    return False
+
+
+def fallback_extract_ideas_from_text(text: str, max_ideas: int = 8) -> List[str]:
+    sentences = split_into_sentences(text)
+    candidates = []
+
+    for sentence in sentences:
+        s = sentence.strip()
+
+        if len(s) < 50:
+            continue
+        if len(s) > 320:
+            continue
+        if looks_like_reference_fragment(s):
+            continue
+
+        score = 0
+
+        if re.search(r"\b(ai|artificial intelligence|generative ai|genai)\b", s, flags=re.IGNORECASE):
+            score += 3
+        if re.search(r"\b(result|finding|conclusion|implication|recommendation|evidence|study|review|analysis)\b", s, flags=re.IGNORECASE):
+            score += 3
+        if re.search(r"\b(productivity|adoption|worker|employee|organization|management|implementation|trust|risk)\b", s, flags=re.IGNORECASE):
+            score += 2
+        if re.search(r"\b(may|can|could|suggests?|shows?|highlights?|indicates?)\b", s, flags=re.IGNORECASE):
+            score += 1
+
+        word_count = len(re.findall(r"\b[a-zA-Z][a-zA-Z-]+\b", s))
+        score += min(word_count // 12, 3)
+
+        candidates.append((score, s))
+
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    selected = [c[1] for c in candidates[:max_ideas]]
+
+    cleaned = []
+    for item in selected:
+        item = re.sub(r"\s+", " ", item).strip()
+        item = item.rstrip(" ;")
+        if item:
+            cleaned.append(item)
+
+    return dedupe_preserve_order(cleaned)
+
+
+# ============================================================
+# EXTRACTION DES IDEES
+# ============================================================
+
+def extract_from_chunks(doc_title: str, chunks: List[Dict[str, str]]) -> List[str]:
     extracted_ideas: List[str] = []
-
     total = len(chunks)
+
     for index, chunk in enumerate(chunks, start=1):
         log(f"Extraction des idées - {doc_title} - morceau {index}/{total} - {chunk['section_title']}")
+
         prompt = build_extract_prompt(doc_title, chunk["section_title"], chunk["text"])
-        raw = call_ollama(prompt)
-        ideas = parse_bullet_list(raw)
-        ideas = normalize_bullets_to_english(ideas)
+        raw = safe_call_ollama(prompt, num_predict=1536)
+        ideas = parse_bullet_list(raw) if raw else []
 
-        if not ideas:
-            extracted_ideas.append("[No idea retrieved for this chunk]")
-        else:
+        if ideas:
+            ideas = normalize_bullets_to_english(ideas)
             extracted_ideas.extend(ideas)
+            continue
 
-    return extracted_ideas
+        fallback = fallback_extract_ideas_from_text(chunk["text"], max_ideas=6)
+
+        if fallback:
+            extracted_ideas.extend(fallback)
+        else:
+            extracted_ideas.append("[No idea retrieved for this chunk]")
+
+    return dedupe_preserve_order(extracted_ideas)
 
 
 def select_structuring_ideas(doc_title: str, all_ideas: List[str], max_ideas: int = MAX_STRUCTURING_IDEAS) -> List[str]:
@@ -648,14 +905,16 @@ def select_structuring_ideas(doc_title: str, all_ideas: List[str], max_ideas: in
         return []
 
     prompt = build_select_structuring_ideas_prompt(doc_title, useful_ideas, max_ideas)
-    raw = call_ollama(prompt)
-    selected = parse_bullet_list(raw)
-    selected = normalize_bullets_to_english(selected)
+    raw = safe_call_ollama(prompt, num_predict=1024)
+    selected = parse_bullet_list(raw) if raw else []
 
-    if not selected:
-        return useful_ideas[:max_ideas]
+    if selected:
+        selected = normalize_bullets_to_english(selected)
+        selected = dedupe_preserve_order(selected)
+        if selected:
+            return selected[:max_ideas]
 
-    return dedupe_preserve_order(selected)[:max_ideas]
+    return useful_ideas[:max_ideas]
 
 
 def select_complementary_ideas(
@@ -671,10 +930,7 @@ def select_complementary_ideas(
         if idea.strip() and idea.strip() != "[No idea retrieved for this chunk]"
     ]
 
-    if not useful_ideas:
-        return []
-
-    if not structuring_ideas:
+    if not useful_ideas or not structuring_ideas:
         return []
 
     prompt = build_select_complementary_ideas_prompt(
@@ -683,22 +939,18 @@ def select_complementary_ideas(
         structuring_ideas,
         max_ideas
     )
-    raw = call_ollama(prompt)
-    selected = parse_bullet_list(raw)
-    selected = normalize_bullets_to_english(selected)
+    raw = safe_call_ollama(prompt, num_predict=1024)
+    selected = parse_bullet_list(raw) if raw else []
 
-    if not selected:
-        remaining = keep_new_items(structuring_ideas, useful_ideas)
-        return remaining[:max_ideas]
+    if selected:
+        selected = normalize_bullets_to_english(selected)
+        selected = dedupe_preserve_order(selected)
+        selected = keep_new_items(structuring_ideas, selected)
+        if selected:
+            return selected[:max_ideas]
 
-    selected = dedupe_preserve_order(selected)
-    selected = keep_new_items(structuring_ideas, selected)
-
-    if not selected:
-        remaining = keep_new_items(structuring_ideas, useful_ideas)
-        return remaining[:max_ideas]
-
-    return selected[:max_ideas]
+    remaining = keep_new_items(structuring_ideas, useful_ideas)
+    return remaining[:max_ideas]
 
 
 def check_missing_key_ideas(
@@ -726,18 +978,15 @@ def check_missing_key_ideas(
         current_selected_ideas,
         max_missing
     )
-    raw = call_ollama(prompt)
-    missing = parse_bullet_list(raw)
-    missing = normalize_bullets_to_english(missing)
+    raw = safe_call_ollama(prompt, num_predict=1024)
+    missing = parse_bullet_list(raw) if raw else []
 
     if not missing:
         return []
 
+    missing = normalize_bullets_to_english(missing)
     missing = dedupe_preserve_order(missing)
     missing = keep_new_items(current_selected_ideas, missing)
-
-    if not missing:
-        return []
 
     return missing[:max_missing]
 
@@ -793,75 +1042,38 @@ METADATA_PATTERNS = [
     r"https?://",
 ]
 
-MONTHS_PATTERN = re.compile(
-    r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\b",
-    flags=re.IGNORECASE
-)
-
-
 def contains_number_data(text: str) -> bool:
     return bool(NUMBER_PATTERN.search(text))
 
 
-def split_into_sentences(text: str) -> List[str]:
-    text = normalize_spaces(text)
+def is_metadata_sentence(text: str) -> bool:
+    low = text.lower()
 
-    text = re.sub(r"\bet al\.", "et al", text, flags=re.IGNORECASE)
-    text = re.sub(r"\be\.g\.", "eg", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bi\.e\.", "ie", text, flags=re.IGNORECASE)
+    for pattern in METADATA_PATTERNS:
+        if re.search(pattern, low):
+            return True
 
-    parts = re.split(r"(?<=[\.\!\?])\s+(?=[A-ZÀ-ÖØ-Ý0-9])", text)
-
-    sentences = []
-    for part in parts:
-        part = part.strip()
-        if part:
-            sentences.append(part)
-
-    return sentences
-
-
-def clean_numeric_sentence(sentence: str) -> str:
-    sentence = normalize_spaces(sentence)
-    sentence = re.sub(r"\s+\)", ")", sentence)
-    sentence = re.sub(r"\(\s+", "(", sentence)
-    return sentence.strip(" -•\t")
-
-
-def is_metadata_sentence(sentence: str) -> bool:
-    low = sentence.lower()
-    return any(re.search(pattern, low) for pattern in METADATA_PATTERNS)
-
-
-def is_date_only_sentence(sentence: str) -> bool:
-    s = sentence.strip()
-
-    if not contains_number_data(s):
-        return False
-
-    tmp = re.sub(r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b", " ", s)
-    tmp = re.sub(r"\b(?:19|20)\d{2}\b", " ", tmp)
-    tmp = MONTHS_PATTERN.sub(" ", tmp)
-
-    if NUMBER_PATTERN.search(tmp):
-        return False
-
-    return True
-
-
-def looks_like_reference_fragment(sentence: str) -> bool:
-    low = sentence.lower()
-
-    if ";" in sentence and low.count("(") >= 2:
-        return True
-
-    if re.search(r"\b[a-zà-ÿ-]+ et al\b", low):
-        return True
-
-    if low.count(",") > 6:
+    if re.fullmatch(r"[\W\d]+", low):
         return True
 
     return False
+
+
+def is_date_only_sentence(text: str) -> bool:
+    low = text.lower().strip()
+
+    if re.fullmatch(r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}", low):
+        return True
+
+    if re.fullmatch(r"(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{4}", low):
+        return True
+
+    return False
+
+
+def clean_numeric_sentence(text: str) -> str:
+    text = re.sub(r"\s+", " ", text).strip(" -\t")
+    return text
 
 
 def extract_numeric_sentences(text: str) -> List[str]:
@@ -875,22 +1087,16 @@ def extract_numeric_sentences(text: str) -> List[str]:
 
         if not s:
             continue
-
         if len(s) < 20:
             continue
-
         if not contains_number_data(s):
             continue
-
         if re.fullmatch(r"[\d\s,.\-:%()/%]+", s):
             continue
-
         if is_metadata_sentence(s):
             continue
-
         if is_date_only_sentence(s):
             continue
-
         if looks_like_reference_fragment(s):
             continue
 
@@ -906,9 +1112,6 @@ def extract_numeric_sentences(text: str) -> List[str]:
 def format_output_block(
     title: str,
     all_ideas: List[str],
-    structuring_ideas: List[str],
-    complementary_ideas: List[str],
-    missing_ideas: List[str],
     final_key_ideas: List[str],
     numeric_sentences: List[str]
 ) -> str:
@@ -936,6 +1139,7 @@ def format_output_block(
 
     return "\n".join(blocks) + "\n"
 
+
 # ============================================================
 # TRAITEMENT D'UN FICHIER
 # ============================================================
@@ -953,12 +1157,15 @@ def process_file(file_path: Path) -> str:
     clean_content = clean_source_text(raw_content)
     if not clean_content.strip():
         log(f"Contenu vide après nettoyage : {file_path.name}")
-        return f"{title}\n- Content empty after cleaning.\n"
+        return f"{title}\nALL EXTRACTED IDEAS\n- Content empty after cleaning.\n"
+
+    log(f"Taille texte nettoyé : {len(clean_content)} caractères")
 
     chunks = build_section_chunks(clean_content)
     log(f"Nombre de morceaux pour {file_path.name} : {len(chunks)}")
 
     all_ideas = extract_from_chunks(title, chunks)
+    all_ideas = dedupe_preserve_order(all_ideas)
 
     structuring_ideas = select_structuring_ideas(
         title,
@@ -994,13 +1201,10 @@ def process_file(file_path: Path) -> str:
     numeric_sentences = extract_numeric_sentences(clean_content)
 
     return format_output_block(
-        title,
-        all_ideas,
-        structuring_ideas,
-        complementary_ideas,
-        missing_ideas,
-        final_key_ideas,
-        numeric_sentences
+        title=title,
+        all_ideas=all_ideas,
+        final_key_ideas=final_key_ideas,
+        numeric_sentences=numeric_sentences
     )
 
 
