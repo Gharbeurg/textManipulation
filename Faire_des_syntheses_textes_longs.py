@@ -24,9 +24,11 @@ SEPARATOR = "\n--------------------------------------\n"
 SECTION_MAX_CHARS = 16000
 SECTION_OVERLAP = 1200
 
-MAX_STRUCTURING_IDEAS = 10
-MAX_COMPLEMENTARY_IDEAS = 10
-MAX_MISSING_IDEAS = 3
+MAX_EXTRACT_IDEAS_PER_CHUNK = 8
+MAX_CHUNK_SYNTHESIS_IDEAS = 6
+MAX_GROUP_SYNTHESIS_IDEAS = 10
+MAX_FINAL_SYNTHESIS_IDEAS = 20
+GROUP_SIZE = 5
 
 # ============================================================
 # OUTILS DE BASE
@@ -80,18 +82,11 @@ def dedupe_preserve_order(items: List[str]) -> List[str]:
     return result
 
 
-def keep_new_items(base_items: List[str], candidate_items: List[str]) -> List[str]:
-    seen = {re.sub(r"\s+", " ", x.strip()).lower() for x in base_items if x.strip()}
-    result = []
-
-    for item in candidate_items:
-        cleaned = re.sub(r"\s+", " ", item.strip())
-        key = cleaned.lower()
-        if cleaned and key not in seen:
-            seen.add(key)
-            result.append(cleaned)
-
-    return result
+def split_list_into_groups(items: List[str], group_size: int) -> List[List[str]]:
+    groups = []
+    for i in range(0, len(items), group_size):
+        groups.append(items[i:i + group_size])
+    return groups
 
 
 # ============================================================
@@ -126,6 +121,26 @@ def call_ollama(prompt: str, model: str = MODEL_NAME) -> str:
 
     log("Réponse Ollama reçue")
     return text
+
+
+# ============================================================
+# PARSING DES LISTES A PUCES
+# ============================================================
+
+def parse_bullet_list(raw_text: str) -> List[str]:
+    items: List[str] = []
+
+    for raw_line in raw_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        if re.match(r"^[-*•]\s+", line):
+            item = re.sub(r"^[-*•]\s+", "", line).strip()
+            if item:
+                items.append(item)
+
+    return dedupe_preserve_order(items)
 
 
 # ============================================================
@@ -425,7 +440,7 @@ def build_section_chunks(clean_text: str) -> List[dict]:
             sub_chunks = split_large_text(section_text)
             for i, sub_chunk in enumerate(sub_chunks, start=1):
                 chunks.append({
-                    "section_title": f"{section_title} [partie {i}/{len(sub_chunks)}]",
+                    "section_title": f"{section_title} [part {i}/{len(sub_chunks)}]",
                     "text": sub_chunk
                 })
 
@@ -433,7 +448,7 @@ def build_section_chunks(clean_text: str) -> List[dict]:
 
 
 # ============================================================
-# EXTRACTION DES IDEES
+# PROMPTS DE SYNTHÈSE HIÉRARCHIQUE
 # ============================================================
 
 def build_extract_prompt(doc_title: str, section_title: str, chunk_text: str) -> str:
@@ -457,7 +472,7 @@ Rules:
 - Do not include bibliography titles.
 - Do not present references to other articles as if they were ideas of this document.
 - Keep only ideas useful for understanding this excerpt.
-- Give at most 8 ideas for this excerpt.
+- Give at most {MAX_EXTRACT_IDEAS_PER_CHUNK} ideas for this excerpt.
 - If the excerpt contains few ideas, output only the ideas that are really present.
 - If the excerpt contains no useful idea, respond exactly:
 - No useful idea in this excerpt.
@@ -472,21 +487,14 @@ Text:
 """.strip()
 
 
-def build_select_structuring_ideas_prompt(doc_title: str, all_ideas: List[str], max_ideas: int) -> str:
-    ideas_text = "\n".join([f"- {idea}" for idea in all_ideas])
+def build_chunk_synthesis_prompt(doc_title: str, section_title: str, extracted_ideas: List[str]) -> str:
+    ideas_text = "\n".join([f"- {idea}" for idea in extracted_ideas])
 
     return f"""
-You receive a list of ideas extracted from different parts of the same document.
+You receive ideas extracted from one excerpt of a document.
 
 Task:
-select the most structuring ideas needed to understand the document.
-
-By "structuring ideas", we mean ideas that provide:
-- the topic or objective of the document
-- the main findings
-- the major results
-- the overall conclusion
-- the major limitations or implications if they matter
+write a short, high-quality synthesis of the most important ideas from this excerpt.
 
 Rules:
 - Output in English only.
@@ -496,37 +504,40 @@ Rules:
 - No headings.
 - No introduction.
 - No conclusion.
-- You may lightly rephrase for clarity.
-- Keep at most {max_ideas} ideas.
-- Avoid duplicates and ideas that are too similar.
+- Merge overlapping ideas when useful.
+- Keep the most important information only.
+- Keep at most {MAX_CHUNK_SYNTHESIS_IDEAS} ideas.
+- Cover, when present: objective, method, main findings, limitations, implications.
 - Do not invent anything.
 
 Document title: {doc_title}
+Excerpt: {section_title}
 
-List of ideas:
+Extracted ideas:
 \"\"\"
 {ideas_text}
 \"\"\"
 """.strip()
 
 
-def build_select_complementary_ideas_prompt(
-    doc_title: str,
-    all_ideas: List[str],
-    structuring_ideas: List[str],
-    max_ideas: int
-) -> str:
-    all_ideas_text = "\n".join([f"- {idea}" for idea in all_ideas])
-    structuring_text = "\n".join([f"- {idea}" for idea in structuring_ideas])
+def build_group_synthesis_prompt(doc_title: str, group_index: int, chunk_summaries: List[List[str]]) -> str:
+    blocks = []
+
+    for i, summary in enumerate(chunk_summaries, start=1):
+        blocks.append(f"Excerpt summary {i}:")
+        if summary:
+            blocks.extend([f"- {idea}" for idea in summary])
+        else:
+            blocks.append("- No useful idea.")
+        blocks.append("")
+
+    summaries_text = "\n".join(blocks).strip()
 
     return f"""
-You receive:
-1) the full list of ideas extracted from a document
-2) a list already chosen as the most structuring ideas
+You receive several short excerpt summaries from the same document.
 
 Task:
-select up to {max_ideas} important complementary ideas that add useful information
-without repeating the ideas already selected.
+produce an intermediate synthesis for this group of excerpt summaries.
 
 Rules:
 - Output in English only.
@@ -536,222 +547,175 @@ Rules:
 - No headings.
 - No introduction.
 - No conclusion.
-- These ideas must be important but not redundant with the structuring ideas.
-- They may clarify a method, an important nuance, a limitation, a recommendation, or a useful implication.
+- Merge repeated ideas.
+- Keep only the strongest and most informative ideas.
+- Keep at most {MAX_GROUP_SYNTHESIS_IDEAS} ideas.
+- Preserve important points that appear only once if they are central.
+- Cover, when present: objective, method, sample/data, main findings, limitations, recommendations.
 - Do not invent anything.
 
 Document title: {doc_title}
+Group number: {group_index}
 
-Structuring ideas already selected:
+Excerpt summaries:
 \"\"\"
-{structuring_text}
-\"\"\"
-
-Full list of ideas:
-\"\"\"
-{all_ideas_text}
+{summaries_text}
 \"\"\"
 """.strip()
 
 
-def build_check_missing_ideas_prompt(
-    doc_title: str,
-    all_ideas: List[str],
-    selected_ideas: List[str],
-    max_missing: int
-) -> str:
-    all_ideas_text = "\n".join([f"- {idea}" for idea in all_ideas])
-    selected_text = "\n".join([f"- {idea}" for idea in selected_ideas])
+def build_final_hierarchical_synthesis_prompt(doc_title: str, group_summaries: List[List[str]]) -> str:
+    blocks = []
+
+    for i, summary in enumerate(group_summaries, start=1):
+        blocks.append(f"Intermediate summary {i}:")
+        if summary:
+            blocks.extend([f"- {idea}" for idea in summary])
+        else:
+            blocks.append("- No useful idea.")
+        blocks.append("")
+
+    summaries_text = "\n".join(blocks).strip()
 
     return f"""
-You receive:
-1) the full list of ideas extracted from a document
-2) the current selection of key ideas
+You receive intermediate summaries built from different parts of a long document.
 
 Task:
-check whether important ideas are still missing from the current selection.
+produce the final synthesis of the key ideas of the whole document.
 
 Rules:
 - Output in English only.
-- Look only for truly important ideas missing from the current selection.
-- Do not add redundant ideas.
-- Do not add highly secondary ideas.
 - Respond only with a bullet list.
 - One idea per line starting with "- ".
 - No JSON.
 - No headings.
 - No introduction.
 - No conclusion.
-- Give at most {max_missing} missing ideas.
-- If no important idea is missing, respond exactly:
-- No important missing idea.
+- Keep only the most important ideas for understanding the whole document.
+- Merge duplicates and very similar ideas.
+- Keep at most {MAX_FINAL_SYNTHESIS_IDEAS} ideas.
+- Ensure balanced coverage when present:
+  - objective or topic
+  - method
+  - sample or data
+  - main findings
+  - limitations
+  - implications or recommendations
 - Do not invent anything.
 
 Document title: {doc_title}
 
-Current selection:
+Intermediate summaries:
 \"\"\"
-{selected_text}
-\"\"\"
-
-Full list of ideas:
-\"\"\"
-{all_ideas_text}
+{summaries_text}
 \"\"\"
 """.strip()
 
 
-def parse_bullet_list(raw_text: str) -> List[str]:
-    items: List[str] = []
+# ============================================================
+# EXTRACTION ET SYNTHESE HIÉRARCHIQUE
+# ============================================================
 
-    for raw_line in raw_text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
+def extract_ideas_from_chunk(doc_title: str, section_title: str, chunk_text: str) -> List[str]:
+    prompt = build_extract_prompt(doc_title, section_title, chunk_text)
+    raw = call_ollama(prompt)
+    ideas = parse_bullet_list(raw)
+    ideas = normalize_bullets_to_english(ideas)
 
-        if re.match(r"^[-*•]\s+", line):
-            item = re.sub(r"^[-*•]\s+", "", line).strip()
-            if item:
-                items.append(item)
+    if not ideas:
+        return ["No useful idea in this excerpt."]
 
-    return items
+    return ideas
 
 
-def extract_from_chunks(doc_title: str, chunks: List[dict]) -> List[str]:
-    extracted_ideas: List[str] = []
+def synthesize_chunk_ideas(doc_title: str, section_title: str, extracted_ideas: List[str]) -> List[str]:
+    useful = [x for x in extracted_ideas if x.strip() and x.strip().lower() != "no useful idea in this excerpt."]
+
+    if not useful:
+        return []
+
+    prompt = build_chunk_synthesis_prompt(doc_title, section_title, useful)
+    raw = call_ollama(prompt)
+    ideas = parse_bullet_list(raw)
+    ideas = normalize_bullets_to_english(ideas)
+
+    if not ideas:
+        return useful[:MAX_CHUNK_SYNTHESIS_IDEAS]
+
+    return ideas[:MAX_CHUNK_SYNTHESIS_IDEAS]
+
+
+def synthesize_group(doc_title: str, group_index: int, chunk_summaries: List[List[str]]) -> List[str]:
+    useful = [summary for summary in chunk_summaries if summary]
+
+    if not useful:
+        return []
+
+    prompt = build_group_synthesis_prompt(doc_title, group_index, useful)
+    raw = call_ollama(prompt)
+    ideas = parse_bullet_list(raw)
+    ideas = normalize_bullets_to_english(ideas)
+
+    if not ideas:
+        flat = []
+        for summary in useful:
+            flat.extend(summary)
+        return dedupe_preserve_order(flat)[:MAX_GROUP_SYNTHESIS_IDEAS]
+
+    return ideas[:MAX_GROUP_SYNTHESIS_IDEAS]
+
+
+def build_hierarchical_final_synthesis(doc_title: str, group_summaries: List[List[str]]) -> List[str]:
+    useful = [summary for summary in group_summaries if summary]
+
+    if not useful:
+        return []
+
+    prompt = build_final_hierarchical_synthesis_prompt(doc_title, useful)
+    raw = call_ollama(prompt)
+    ideas = parse_bullet_list(raw)
+    ideas = normalize_bullets_to_english(ideas)
+
+    if not ideas:
+        flat = []
+        for summary in useful:
+            flat.extend(summary)
+        return dedupe_preserve_order(flat)[:MAX_FINAL_SYNTHESIS_IDEAS]
+
+    return ideas[:MAX_FINAL_SYNTHESIS_IDEAS]
+
+
+def run_hierarchical_synthesis(doc_title: str, chunks: List[dict]) -> tuple[List[str], List[str]]:
+    all_extracted_ideas: List[str] = []
+    chunk_summaries: List[List[str]] = []
 
     total = len(chunks)
+
     for index, chunk in enumerate(chunks, start=1):
         log(f"Extraction des idées - {doc_title} - morceau {index}/{total} - {chunk['section_title']}")
-        prompt = build_extract_prompt(doc_title, chunk["section_title"], chunk["text"])
-        raw = call_ollama(prompt)
-        ideas = parse_bullet_list(raw)
-        ideas = normalize_bullets_to_english(ideas)
+        extracted = extract_ideas_from_chunk(doc_title, chunk["section_title"], chunk["text"])
+        all_extracted_ideas.extend(extracted)
 
-        if not ideas:
-            extracted_ideas.append("[No idea retrieved for this chunk]")
-        else:
-            extracted_ideas.extend(ideas)
+        log(f"Synthèse locale du morceau - {doc_title} - morceau {index}/{total}")
+        chunk_summary = synthesize_chunk_ideas(doc_title, chunk["section_title"], extracted)
+        chunk_summaries.append(chunk_summary)
 
-    return extracted_ideas
+    group_of_chunk_summaries = split_list_into_groups(chunk_summaries, GROUP_SIZE)
 
+    intermediate_group_summaries: List[List[str]] = []
+    for group_index, group in enumerate(group_of_chunk_summaries, start=1):
+        log(f"Synthèse intermédiaire du groupe - {doc_title} - groupe {group_index}/{len(group_of_chunk_summaries)}")
+        group_summary = synthesize_group(doc_title, group_index, group)
+        intermediate_group_summaries.append(group_summary)
 
-def select_structuring_ideas(doc_title: str, all_ideas: List[str], max_ideas: int = MAX_STRUCTURING_IDEAS) -> List[str]:
-    log(f"Sélection des {max_ideas} idées les plus structurantes - {doc_title}")
+    log(f"Synthèse finale hiérarchique - {doc_title}")
+    final_synthesis = build_hierarchical_final_synthesis(doc_title, intermediate_group_summaries)
 
-    useful_ideas = [
-        idea for idea in all_ideas
-        if idea.strip() and idea.strip() != "[No idea retrieved for this chunk]"
-    ]
-
-    if not useful_ideas:
-        return []
-
-    prompt = build_select_structuring_ideas_prompt(doc_title, useful_ideas, max_ideas)
-    raw = call_ollama(prompt)
-    selected = parse_bullet_list(raw)
-    selected = normalize_bullets_to_english(selected)
-
-    if not selected:
-        return useful_ideas[:max_ideas]
-
-    return dedupe_preserve_order(selected)[:max_ideas]
-
-
-def select_complementary_ideas(
-    doc_title: str,
-    all_ideas: List[str],
-    structuring_ideas: List[str],
-    max_ideas: int = MAX_COMPLEMENTARY_IDEAS
-) -> List[str]:
-    log(f"Sélection des {max_ideas} idées complémentaires importantes - {doc_title}")
-
-    useful_ideas = [
-        idea for idea in all_ideas
-        if idea.strip() and idea.strip() != "[No idea retrieved for this chunk]"
-    ]
-
-    if not useful_ideas:
-        return []
-
-    if not structuring_ideas:
-        return []
-
-    prompt = build_select_complementary_ideas_prompt(
-        doc_title,
-        useful_ideas,
-        structuring_ideas,
-        max_ideas
+    all_extracted_ideas = dedupe_preserve_order(
+        [x for x in all_extracted_ideas if x.strip() and x.strip().lower() != "no useful idea in this excerpt."]
     )
-    raw = call_ollama(prompt)
-    selected = parse_bullet_list(raw)
-    selected = normalize_bullets_to_english(selected)
 
-    if not selected:
-        remaining = keep_new_items(structuring_ideas, useful_ideas)
-        return remaining[:max_ideas]
-
-    selected = dedupe_preserve_order(selected)
-    selected = keep_new_items(structuring_ideas, selected)
-
-    if not selected:
-        remaining = keep_new_items(structuring_ideas, useful_ideas)
-        return remaining[:max_ideas]
-
-    return selected[:max_ideas]
-
-
-def check_missing_key_ideas(
-    doc_title: str,
-    all_ideas: List[str],
-    current_selected_ideas: List[str],
-    max_missing: int = MAX_MISSING_IDEAS
-) -> List[str]:
-    log(f"Contrôle des idées importantes manquantes - {doc_title}")
-
-    useful_all_ideas = [
-        idea for idea in all_ideas
-        if idea.strip() and idea.strip() != "[No idea retrieved for this chunk]"
-    ]
-
-    if not useful_all_ideas:
-        return []
-
-    if not current_selected_ideas:
-        return useful_all_ideas[:max_missing]
-
-    prompt = build_check_missing_ideas_prompt(
-        doc_title,
-        useful_all_ideas,
-        current_selected_ideas,
-        max_missing
-    )
-    raw = call_ollama(prompt)
-    missing = parse_bullet_list(raw)
-    missing = normalize_bullets_to_english(missing)
-
-    if not missing:
-        return []
-
-    missing = dedupe_preserve_order(missing)
-    missing = keep_new_items(current_selected_ideas, missing)
-
-    if not missing:
-        return []
-
-    return missing[:max_missing]
-
-
-def build_final_key_ideas(
-    structuring_ideas: List[str],
-    complementary_ideas: List[str],
-    missing_ideas: List[str]
-) -> List[str]:
-    final_ideas: List[str] = []
-    final_ideas.extend(structuring_ideas)
-    final_ideas.extend(keep_new_items(final_ideas, complementary_ideas))
-    final_ideas.extend(keep_new_items(final_ideas, missing_ideas))
-    return dedupe_preserve_order(final_ideas)
+    return all_extracted_ideas, final_synthesis
 
 
 # ============================================================
@@ -906,9 +870,6 @@ def extract_numeric_sentences(text: str) -> List[str]:
 def format_output_block(
     title: str,
     all_ideas: List[str],
-    structuring_ideas: List[str],
-    complementary_ideas: List[str],
-    missing_ideas: List[str],
     final_key_ideas: List[str],
     numeric_sentences: List[str]
 ) -> str:
@@ -936,6 +897,7 @@ def format_output_block(
 
     return "\n".join(blocks) + "\n"
 
+
 # ============================================================
 # TRAITEMENT D'UN FICHIER
 # ============================================================
@@ -958,37 +920,7 @@ def process_file(file_path: Path) -> str:
     chunks = build_section_chunks(clean_content)
     log(f"Nombre de morceaux pour {file_path.name} : {len(chunks)}")
 
-    all_ideas = extract_from_chunks(title, chunks)
-
-    structuring_ideas = select_structuring_ideas(
-        title,
-        all_ideas,
-        max_ideas=MAX_STRUCTURING_IDEAS
-    )
-
-    complementary_ideas = select_complementary_ideas(
-        title,
-        all_ideas,
-        structuring_ideas,
-        max_ideas=MAX_COMPLEMENTARY_IDEAS
-    )
-
-    current_selected = []
-    current_selected.extend(structuring_ideas)
-    current_selected.extend(keep_new_items(current_selected, complementary_ideas))
-
-    missing_ideas = check_missing_key_ideas(
-        title,
-        all_ideas,
-        current_selected,
-        max_missing=MAX_MISSING_IDEAS
-    )
-
-    final_key_ideas = build_final_key_ideas(
-        structuring_ideas,
-        complementary_ideas,
-        missing_ideas
-    )
+    all_ideas, final_key_ideas = run_hierarchical_synthesis(title, chunks)
     final_key_ideas = normalize_bullets_to_english(final_key_ideas)
 
     numeric_sentences = extract_numeric_sentences(clean_content)
@@ -996,9 +928,6 @@ def process_file(file_path: Path) -> str:
     return format_output_block(
         title,
         all_ideas,
-        structuring_ideas,
-        complementary_ideas,
-        missing_ideas,
         final_key_ideas,
         numeric_sentences
     )
