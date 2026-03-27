@@ -2,9 +2,9 @@
 
 from pathlib import Path
 from datetime import datetime
+from typing import List, Dict
 import re
 import time
-from typing import List, Dict
 
 import requests
 
@@ -14,30 +14,19 @@ import requests
 # ============================================================
 
 TXT_DIR = Path(r"C:/PYTHON/.entree/Sources")
-OUTPUT_FILE = Path(r"C:/PYTHON/.data/syntheses.txt")
+OUTPUT_DIR = Path(r"C:/PYTHON/.data/ResultatsIdees")
 
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
 MODEL = "qwen3:8b"
 
 OUTPUT_LANGUAGE = "English"
 
-TOP_STRUCTURING_IDEAS = 10
-TOP_COMPLEMENTARY_IDEAS = 10
-
 TARGET_CHUNK_WORDS = 1200
 MAX_CHUNK_WORDS = 1600
 MIN_CHUNK_WORDS = 350
 
-WRITE_FINAL_SUMMARY = True
-WRITE_DOCUMENT_PLAN = True
-WRITE_ALL_IDEAS = True
-WRITE_NUMERIC_SENTENCES = True
-WRITE_IDEA_SCORES = True
-
-MAX_NUMERIC_SENTENCES = 25
-
 REQUEST_TIMEOUT = 240
-SEPARATOR = "\n--------------------------------------\n\n"
+MAX_NUMERIC_SENTENCES = 200
 
 
 # ============================================================
@@ -45,7 +34,7 @@ SEPARATOR = "\n--------------------------------------\n\n"
 # ============================================================
 
 def log(label: str) -> None:
-    print("{} - {}".format(datetime.now().strftime("%d/%m/%Y %H:%M:%S"), label), flush=True)
+    print(f"{datetime.now().strftime('%d/%m/%Y %H:%M:%S')} - {label}", flush=True)
 
 
 # ============================================================
@@ -81,52 +70,6 @@ def split_into_sentences_basic(text: str) -> List[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
-def contains_digit(text: str) -> bool:
-    return bool(re.search(r"\d", text))
-
-
-def contains_contrast_marker(text: str) -> bool:
-    low = text.lower()
-    markers = [
-        "while", "whereas", "however", "but", "in contrast", "compared with",
-        "higher", "lower", "increase", "decrease", "more", "less", "differ",
-        "difference", "across groups", "high-skill", "mid-skill", "low-skill"
-    ]
-    return any(m in low for m in markers)
-
-
-def looks_generic(text: str) -> bool:
-    low = text.lower().strip()
-
-    generic_starts = [
-        "the document discusses",
-        "the text discusses",
-        "the article discusses",
-        "the article presents",
-        "the text presents",
-        "the document presents",
-        "the article mentions",
-        "the text mentions",
-        "the document mentions",
-        "the article highlights",
-        "the text highlights",
-        "the document highlights",
-    ]
-    if any(low.startswith(x) for x in generic_starts):
-        return True
-
-    generic_phrases = [
-        "is important",
-        "plays an important role",
-        "has an impact",
-        "is a key issue",
-        "is relevant",
-        "is discussed",
-        "is presented",
-    ]
-    return sum(1 for x in generic_phrases if x in low) >= 2
-
-
 def deduplicate_texts(items: List[str]) -> List[str]:
     seen = set()
     result = []
@@ -141,21 +84,25 @@ def deduplicate_texts(items: List[str]) -> List[str]:
     return result
 
 
-# ============================================================
-# SORTIE FICHIER
-# ============================================================
+def deduplicate_ideas_simple(ideas: List[str]) -> List[str]:
+    out: List[str] = []
+    seen = set()
 
-def init_output_file() -> None:
-    OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT_FILE.write_text("", encoding="utf-8")
+    for idea in ideas:
+        normalized = re.sub(r"[^a-z0-9]+", " ", idea.lower()).strip()
+        if not normalized:
+            continue
 
+        tokens = normalized.split()
+        key = " ".join(tokens[:20])
 
-def append_output(text: str, add_separator: bool) -> None:
-    OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with OUTPUT_FILE.open("a", encoding="utf-8") as f:
-        if add_separator:
-            f.write(SEPARATOR)
-        f.write(text.strip() + "\n")
+        if key in seen:
+            continue
+
+        seen.add(key)
+        out.append(idea)
+
+    return out
 
 
 # ============================================================
@@ -180,7 +127,7 @@ def ollama_generate(prompt: str, temperature: float = 0.2, num_predict: int = 12
 
 
 # ============================================================
-# PARSING DU TEXTE STRUCTURE
+# PARSING TEXTE STRUCTURE
 # ============================================================
 
 def parse_structured_text(text: str) -> Dict:
@@ -281,10 +228,6 @@ def parse_structured_text(text: str) -> Dict:
     }
 
 
-# ============================================================
-# PLAN DU DOCUMENT
-# ============================================================
-
 def build_document_plan(doc: Dict) -> str:
     lines: List[str] = []
 
@@ -350,25 +293,6 @@ def split_text_into_chunks(text: str, target_words: int, max_words: int, min_wor
     return merged
 
 
-def infer_chunk_type(title: str, parent_title: str = "") -> str:
-    t = f"{parent_title} {title}".lower()
-
-    if "abstract" in t or "summary" in t:
-        return "abstract"
-    if "introduction" in t or "background" in t or "literature" in t:
-        return "context"
-    if "method" in t or "survey" in t or "data" in t or "measuring" in t:
-        return "method"
-    if "result" in t or "impact" in t or "regression" in t or "descriptive" in t:
-        return "results"
-    if "discussion" in t:
-        return "discussion"
-    if "conclusion" in t:
-        return "conclusion"
-
-    return "body"
-
-
 def build_section_chunks(doc: Dict) -> List[Dict]:
     chunks: List[Dict] = []
 
@@ -376,7 +300,6 @@ def build_section_chunks(doc: Dict) -> List[Dict]:
         chunks.append({
             "section_title": "Abstract",
             "subsection_title": "",
-            "chunk_type": "abstract",
             "text": doc["abstract"]
         })
 
@@ -389,7 +312,6 @@ def build_section_chunks(doc: Dict) -> List[Dict]:
                 chunks.append({
                     "section_title": section_title,
                     "subsection_title": "",
-                    "chunk_type": infer_chunk_type(section_title),
                     "text": ch
                 })
 
@@ -402,7 +324,6 @@ def build_section_chunks(doc: Dict) -> List[Dict]:
                 chunks.append({
                     "section_title": section_title,
                     "subsection_title": subsection["title"],
-                    "chunk_type": infer_chunk_type(subsection["title"], parent_title=section_title),
                     "text": ch
                 })
 
@@ -410,7 +331,7 @@ def build_section_chunks(doc: Dict) -> List[Dict]:
 
 
 # ============================================================
-# PROMPTS
+# PROMPTS OLLAMA
 # ============================================================
 
 def build_chunk_prompt(doc_title: str, plan: str, chunk: Dict) -> str:
@@ -418,20 +339,8 @@ def build_chunk_prompt(doc_title: str, plan: str, chunk: Dict) -> str:
     if chunk["subsection_title"]:
         section_label += f" > {chunk['subsection_title']}"
 
-    task_rules = {
-        "abstract": "Prioritize the core research question, main finding, and main implication.",
-        "context": "Prioritize the problem addressed, limits of prior literature, and what the document adds.",
-        "method": "Prioritize the data, variables, categories, and method only if they help interpret the findings.",
-        "results": "Prioritize findings, contrasts, mechanisms, and differences across groups.",
-        "discussion": "Prioritize interpretation, implications, and limits.",
-        "conclusion": "Prioritize final conclusions, implications, and recommendations.",
-        "body": "Prioritize concrete findings, arguments, and implications."
-    }
-
-    rule = task_rules.get(chunk["chunk_type"], task_rules["body"])
-
     return f"""
-You are extracting high-value ideas from an academic or professional document.
+You are extracting all important ideas from a document.
 
 OUTPUT LANGUAGE: {OUTPUT_LANGUAGE}
 
@@ -444,26 +353,60 @@ DOCUMENT PLAN:
 CURRENT SECTION:
 {section_label}
 
-CHUNK TYPE:
-{chunk["chunk_type"]}
+TASK:
+Extract all important ideas contained in the text below.
+
+RULES:
+- Extract concrete ideas only.
+- Do not write vague sentences such as "the article discusses" or "the text presents".
+- Keep factual findings, arguments, mechanisms, distinctions, implications, and important methodological points.
+- Keep useful numbers when they matter for the idea.
+- Ignore metadata, repeated headers, page numbers, references, decorative labels, and layout noise.
+- Each idea must be a full sentence.
+- One idea per line, starting with "- ".
+- Do not merge unrelated ideas into one sentence.
+
+TEXT:
+{chunk["text"]}
+""".strip()
+
+
+def build_missing_ideas_prompt(doc_title: str, plan: str, chunk: Dict, existing_ideas: List[str]) -> str:
+    section_label = chunk["section_title"]
+    if chunk["subsection_title"]:
+        section_label += f" > {chunk['subsection_title']}"
+
+    joined_ideas = "\n".join(f"- {idea}" for idea in existing_ideas) if existing_ideas else "- None"
+
+    return f"""
+You are checking whether important ideas were missed in a document extraction step.
+
+OUTPUT LANGUAGE: {OUTPUT_LANGUAGE}
+
+DOCUMENT TITLE:
+{doc_title or "Unknown title"}
+
+DOCUMENT PLAN:
+{plan}
+
+CURRENT SECTION:
+{section_label}
+
+ALREADY EXTRACTED IDEAS:
+{joined_ideas}
 
 TASK:
-Extract 5 to 8 ideas from the text below.
+Read the text below and return only the important ideas that are missing from the existing list.
 
-IMPORTANT RULES:
-- Keep only ideas that are important for understanding the document.
-- Be specific and concrete.
-- Do not repeat the same idea with different wording.
-- Ignore metadata, page layout, repeated running titles, references, biographies, and decorative figure labels.
-- Mention methods only when they are useful for interpreting the findings.
-- Keep quantitative results when they matter.
+RULES:
+- Return only missing ideas.
+- Do not repeat any idea already present.
+- Keep only concrete and useful ideas.
+- Ignore metadata, references, headers, page numbers, and layout noise.
 - Each idea must be a full sentence.
-- Each idea must be self-contained.
-- Avoid vague wording like "the article discusses" or "the text mentions".
-- {rule}
-
-RETURN FORMAT:
-One idea per line, starting with "- "
+- One idea per line, starting with "- ".
+- If nothing important is missing, return exactly:
+NONE
 
 TEXT:
 {chunk["text"]}
@@ -474,7 +417,7 @@ def build_consolidation_prompt(doc_title: str, plan: str, ideas: List[str]) -> s
     joined = "\n".join(f"- {x}" for x in ideas)
 
     return f"""
-You are consolidating ideas extracted from a document.
+You are consolidating a list of ideas extracted from a document.
 
 OUTPUT LANGUAGE: {OUTPUT_LANGUAGE}
 
@@ -485,99 +428,24 @@ DOCUMENT PLAN:
 {plan}
 
 TASK:
-From the list below, produce a cleaned list of distinct ideas.
+Clean and deduplicate the list below while preserving all distinct important ideas.
 
 RULES:
-- Keep only ideas that are important for understanding the document.
-- Merge duplicates and near-duplicates.
-- Preserve important numbers and contrasts.
-- Remove ideas that are too generic or too weak.
-- Keep 15 to 25 ideas.
-- Each idea must be one full sentence.
-- One idea per line, starting with "- "
+- Keep all important distinct ideas.
+- Remove duplicates and near-duplicates.
+- Do not remove an idea just because it is shorter.
+- Preserve useful numbers and contrasts.
+- Keep the wording concrete.
+- Each idea must be a full sentence.
+- One idea per line, starting with "- ".
 
 IDEAS:
 {joined}
 """.strip()
 
 
-def build_ranking_prompt(doc_title: str, plan: str, ideas: List[str], n: int, mode: str) -> str:
-    joined = "\n".join(f"- {x}" for x in ideas)
-
-    if mode == "structuring":
-        description = "Select the most structuring ideas, meaning the ideas without which the document would lose its core meaning."
-    else:
-        description = "Select complementary but still important ideas that enrich understanding of the document without repeating the core ideas."
-
-    return f"""
-You are selecting the strongest ideas from a document.
-
-OUTPUT LANGUAGE: {OUTPUT_LANGUAGE}
-
-DOCUMENT TITLE:
-{doc_title or "Unknown title"}
-
-DOCUMENT PLAN:
-{plan}
-
-TASK:
-{description}
-
-RULES:
-- Return exactly {n} ideas.
-- Keep ideas that are concrete, not generic.
-- Do not repeat ideas with slightly different wording.
-- Preserve important numbers, group differences, and implications when they matter.
-- Each idea must be one full sentence.
-- One idea per line, starting with "- "
-
-IDEAS TO CHOOSE FROM:
-{joined}
-""".strip()
-
-
-def build_final_summary_prompt(
-    doc_title: str,
-    plan: str,
-    structuring_ideas: List[str],
-    complementary_ideas: List[str]
-) -> str:
-    joined1 = "\n".join(f"- {x}" for x in structuring_ideas)
-    joined2 = "\n".join(f"- {x}" for x in complementary_ideas)
-
-    return f"""
-You are writing a final synthesis of a document.
-
-OUTPUT LANGUAGE: {OUTPUT_LANGUAGE}
-
-DOCUMENT TITLE:
-{doc_title or "Unknown title"}
-
-DOCUMENT PLAN:
-{plan}
-
-MOST STRUCTURING IDEAS:
-{joined1}
-
-COMPLEMENTARY IDEAS:
-{joined2}
-
-TASK:
-Write one final synthesis of the key ideas.
-
-RULES:
-- Write one coherent synthesis, not bullets.
-- Keep the hierarchy of the document.
-- Highlight the research question, the main findings, the contrasts, and the implications.
-- Keep important methodological information only when it helps understand the results.
-- Keep important quantitative information when it matters.
-- Avoid generic filler.
-- Length target: 250 to 450 words.
-""".strip()
-
-
 # ============================================================
-# SORTIE LLM -> LISTE D'IDEES
+# PARSING SORTIE OLLAMA
 # ============================================================
 
 def parse_bullet_lines(text: str) -> List[str]:
@@ -586,6 +454,9 @@ def parse_bullet_lines(text: str) -> List[str]:
     for raw in text.splitlines():
         line = raw.strip()
         if not line:
+            continue
+
+        if line.upper() == "NONE":
             continue
 
         if line.startswith("- "):
@@ -600,113 +471,8 @@ def parse_bullet_lines(text: str) -> List[str]:
     return lines
 
 
-def deduplicate_ideas_simple(ideas: List[str]) -> List[str]:
-    out: List[str] = []
-    seen = set()
-
-    for idea in ideas:
-        normalized = re.sub(r"[^a-z0-9]+", " ", idea.lower()).strip()
-        if not normalized:
-            continue
-
-        tokens = normalized.split()
-        key = " ".join(tokens[:20])
-
-        if key in seen:
-            continue
-
-        seen.add(key)
-        out.append(idea)
-
-    return out
-
-
 # ============================================================
-# SCORE DE QUALITE DES IDEES
-# ============================================================
-
-def score_single_idea(idea: str) -> Dict[str, float]:
-    text = idea.strip()
-    wc = word_count(text)
-
-    importance = 5.5
-    if contains_digit(text):
-        importance += 1.5
-    if contains_contrast_marker(text):
-        importance += 1.5
-    if "cause" in text.lower() or "result" in text.lower() or "conclusion" in text.lower():
-        importance += 0.7
-    if wc < 8:
-        importance -= 1.2
-    if looks_generic(text):
-        importance -= 1.5
-    importance = max(0.0, min(10.0, importance))
-
-    specificity = 5.0
-    if wc >= 12:
-        specificity += 1.5
-    if wc >= 18:
-        specificity += 0.8
-    if contains_digit(text):
-        specificity += 1.2
-    if contains_contrast_marker(text):
-        specificity += 1.0
-    if looks_generic(text):
-        specificity -= 2.2
-    if wc < 7:
-        specificity -= 1.3
-    specificity = max(0.0, min(10.0, specificity))
-
-    textual_grounding = 6.0
-    if contains_digit(text):
-        textual_grounding += 1.0
-    if contains_contrast_marker(text):
-        textual_grounding += 0.8
-    if looks_generic(text):
-        textual_grounding -= 2.0
-    if any(x in text.lower() for x in ["may", "might", "could"]) and not contains_digit(text):
-        textual_grounding -= 0.8
-    textual_grounding = max(0.0, min(10.0, textual_grounding))
-
-    global_score = round(
-        (importance * 0.45) + (specificity * 0.30) + (textual_grounding * 0.25),
-        1
-    )
-
-    return {
-        "importance": round(importance, 1),
-        "specificity": round(specificity, 1),
-        "textual_grounding": round(textual_grounding, 1),
-        "global_score": global_score
-    }
-
-
-def score_ideas(ideas: List[str]) -> List[Dict]:
-    scored = []
-    for idea in ideas:
-        scores = score_single_idea(idea)
-        scored.append({
-            "idea": idea,
-            **scores
-        })
-    return scored
-
-
-def sort_scored_ideas(scored_ideas: List[Dict]) -> List[Dict]:
-    return sorted(
-        scored_ideas,
-        key=lambda x: (
-            x["global_score"],
-            x["importance"],
-            x["specificity"],
-            x["textual_grounding"]
-        ),
-        reverse=True
-    )
-
-
-# ============================================================
-# PHRASES AVEC DONNEES CHIFFREES
+# EXTRACTION PHRASES CHIFFREES
 # ============================================================
 
 NUMBER_PATTERN = re.compile(
@@ -797,6 +563,11 @@ METADATA_PATTERNS = [
     r"\bissue\b",
     r"\blicense\b",
     r"\bcopyright\b",
+    r"\bcopyright\b",
+    r"\bcopyright holder\b",
+    r"\bcopyright owner\b",
+    r"\bcopyright notice\b",
+    r"\bcopyright year\b",
     r"\bcreativecommons\b",
     r"https?://",
 ]
@@ -973,7 +744,6 @@ def extract_numeric_sentences(text: str) -> List[str]:
             "score": score
         })
 
-    # dédoublonnage en gardant le meilleur score
     best_by_key: Dict[str, Dict] = {}
     for item in kept:
         key = re.sub(r"\s+", " ", item["sentence"].strip()).lower()
@@ -988,10 +758,85 @@ def extract_numeric_sentences(text: str) -> List[str]:
 
 
 # ============================================================
+# EXTRACTION IDEES
+# ============================================================
+
+def extract_ideas_from_chunk(doc_title: str, plan: str, chunk: Dict) -> List[str]:
+    prompt = build_chunk_prompt(doc_title, plan, chunk)
+    response = ollama_generate(prompt, temperature=0.2, num_predict=1000)
+
+    ideas = parse_bullet_lines(response)
+    if not ideas:
+        ideas = split_into_sentences_basic(response)
+
+    ideas = [clean_idea_text(x) for x in ideas if clean_idea_text(x)]
+    return deduplicate_ideas_simple(ideas)
+
+
+def extract_missing_ideas_from_chunk(doc_title: str, plan: str, chunk: Dict, existing_ideas: List[str]) -> List[str]:
+    prompt = build_missing_ideas_prompt(doc_title, plan, chunk, existing_ideas)
+    response = ollama_generate(prompt, temperature=0.1, num_predict=800)
+
+    if response.strip().upper() == "NONE":
+        return []
+
+    ideas = parse_bullet_lines(response)
+    ideas = [clean_idea_text(x) for x in ideas if clean_idea_text(x)]
+    return deduplicate_ideas_simple(ideas)
+
+
+def consolidate_ideas(doc_title: str, plan: str, ideas: List[str]) -> List[str]:
+    if not ideas:
+        return []
+
+    prompt = build_consolidation_prompt(doc_title, plan, ideas)
+    response = ollama_generate(prompt, temperature=0.1, num_predict=1400)
+
+    consolidated = parse_bullet_lines(response)
+    if not consolidated:
+        consolidated = ideas[:]
+
+    consolidated = [clean_idea_text(x) for x in consolidated if clean_idea_text(x)]
+    return deduplicate_ideas_simple(consolidated)
+
+
+# ============================================================
+# SORTIE
+# ============================================================
+
+def build_output_text(doc_title: str, ideas: List[str], numeric_sentences: List[str]) -> str:
+    lines: List[str] = []
+
+    lines.append(f"TITRE : {doc_title or 'Unknown title'}")
+    lines.append("")
+
+    lines.append("LES IDEES DU DOCUMENT :")
+    if ideas:
+        for idea in ideas:
+            lines.append(f"- {idea}")
+    else:
+        lines.append("- No idea extracted.")
+    lines.append("")
+
+    lines.append("LES CHIFFRES DU DOCUMENT :")
+    if numeric_sentences:
+        for sentence in numeric_sentences:
+            lines.append(f"- {sentence}")
+    else:
+        lines.append("- No numerical sentence found.")
+
+    return "\n".join(lines).strip() + "\n"
+
+
+def safe_output_filename(txt_path: Path) -> Path:
+    return OUTPUT_DIR / f"{txt_path.stem}_extraction.txt"
+
+
+# ============================================================
 # PIPELINE DOCUMENT
 # ============================================================
 
-def process_document(txt_path: Path) -> str:
+def process_document(txt_path: Path) -> None:
     log(f"Début traitement : {txt_path.name}")
 
     text = txt_path.read_text(encoding="utf-8", errors="ignore")
@@ -1001,183 +846,62 @@ def process_document(txt_path: Path) -> str:
     plan = build_document_plan(doc)
     chunks = build_section_chunks(doc)
 
-    log(f"Plan reconstruit : {txt_path.name}")
+    if not chunks:
+        chunks = [{
+            "section_title": "Full document",
+            "subsection_title": "",
+            "text": text
+        }]
+
     log(f"Nombre de chunks : {len(chunks)}")
 
     all_ideas: List[str] = []
 
+    # Passe 1 : extraction initiale
     for i, chunk in enumerate(chunks, start=1):
-        log(f"Extraction idées chunk {i}/{len(chunks)} - {txt_path.name}")
-        prompt = build_chunk_prompt(doc["title"], plan, chunk)
-        response = ollama_generate(prompt, temperature=0.2, num_predict=900)
-        ideas = parse_bullet_lines(response)
-
-        if not ideas:
-            ideas = split_into_sentences_basic(response)
-
+        log(f"Extraction initiale idées chunk {i}/{len(chunks)} - {txt_path.name}")
+        ideas = extract_ideas_from_chunk(doc["title"], plan, chunk)
         all_ideas.extend(ideas)
         time.sleep(0.2)
 
-    all_ideas = [clean_idea_text(x) for x in all_ideas if clean_idea_text(x)]
     all_ideas = deduplicate_ideas_simple(all_ideas)
+    log(f"Nombre d'idées après passe 1 : {len(all_ideas)}")
 
-    log(f"Nombre d'idées brutes : {len(all_ideas)}")
+    # Passe 2 : contrôle des idées manquantes
+    missing_ideas_all: List[str] = []
 
-    log(f"Consolidation des idées : {txt_path.name}")
-    consolidation_prompt = build_consolidation_prompt(doc["title"], plan, all_ideas)
-    consolidated_text = ollama_generate(consolidation_prompt, temperature=0.1, num_predict=1200)
-    consolidated_ideas = parse_bullet_lines(consolidated_text)
+    for i, chunk in enumerate(chunks, start=1):
+        log(f"Contrôle idées manquantes chunk {i}/{len(chunks)} - {txt_path.name}")
+        missing_ideas = extract_missing_ideas_from_chunk(doc["title"], plan, chunk, all_ideas + missing_ideas_all)
+        missing_ideas_all.extend(missing_ideas)
+        time.sleep(0.2)
 
-    if not consolidated_ideas:
-        consolidated_ideas = all_ideas[:]
+    missing_ideas_all = deduplicate_ideas_simple(missing_ideas_all)
+    log(f"Idées ajoutées après contrôle : {len(missing_ideas_all)}")
 
-    consolidated_ideas = deduplicate_ideas_simple(consolidated_ideas)
+    final_ideas = deduplicate_ideas_simple(all_ideas + missing_ideas_all)
+    log(f"Nombre d'idées avant consolidation : {len(final_ideas)}")
 
-    log(f"Nombre d'idées consolidées : {len(consolidated_ideas)}")
+    # Consolidation finale
+    final_ideas = consolidate_ideas(doc["title"], plan, final_ideas)
+    log(f"Nombre d'idées après consolidation : {len(final_ideas)}")
 
-    log(f"Sélection des idées structurantes : {txt_path.name}")
-    prompt_structuring = build_ranking_prompt(
-        doc["title"], plan, consolidated_ideas, TOP_STRUCTURING_IDEAS, "structuring"
-    )
-    structuring_text = ollama_generate(prompt_structuring, temperature=0.1, num_predict=1000)
-    structuring_ideas = parse_bullet_lines(structuring_text)
-    structuring_ideas = deduplicate_ideas_simple(structuring_ideas)[:TOP_STRUCTURING_IDEAS]
-
-    remaining = [x for x in consolidated_ideas if x not in structuring_ideas]
-
-    log(f"Sélection des idées complémentaires : {txt_path.name}")
-    prompt_complementary = build_ranking_prompt(
-        doc["title"], plan, remaining, TOP_COMPLEMENTARY_IDEAS, "complementary"
-    )
-    complementary_text = ollama_generate(prompt_complementary, temperature=0.1, num_predict=1000)
-    complementary_ideas = parse_bullet_lines(complementary_text)
-    complementary_ideas = deduplicate_ideas_simple(complementary_ideas)[:TOP_COMPLEMENTARY_IDEAS]
-
-    final_summary = ""
-    if WRITE_FINAL_SUMMARY:
-        log(f"Rédaction de la synthèse finale : {txt_path.name}")
-        prompt_summary = build_final_summary_prompt(
-            doc["title"], plan, structuring_ideas, complementary_ideas
-        )
-        final_summary = ollama_generate(prompt_summary, temperature=0.15, num_predict=1600).strip()
-
+    # Extraction chiffres
     numeric_sentences = extract_numeric_sentences(text)
 
-    scored_structuring = sort_scored_ideas(score_ideas(structuring_ideas))
-    scored_complementary = sort_scored_ideas(score_ideas(complementary_ideas))
+    # Ecriture fichier de sortie
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = safe_output_filename(txt_path)
 
-    block = build_output_block(
+    output_text = build_output_text(
         doc_title=doc["title"] or txt_path.stem,
-        plan=plan,
-        raw_ideas=all_ideas,
-        structuring_ideas=structuring_ideas,
-        complementary_ideas=complementary_ideas,
-        final_summary=final_summary,
-        numeric_sentences=numeric_sentences,
-        scored_structuring=scored_structuring,
-        scored_complementary=scored_complementary
+        ideas=final_ideas,
+        numeric_sentences=numeric_sentences
     )
+    out_path.write_text(output_text, encoding="utf-8")
 
+    log(f"Fichier écrit : {out_path}")
     log(f"Fin traitement : {txt_path.name}")
-    return block
-
-
-# ============================================================
-# FORMAT SORTIE
-# ============================================================
-
-def format_scored_idea_line(item: Dict) -> str:
-    return (
-        f"- [{item['global_score']}/10 | "
-        f"I:{item['importance']} "
-        f"S:{item['specificity']} "
-        f"F:{item['textual_grounding']}] "
-        f"{item['idea']}"
-    )
-
-
-def build_output_block(
-    doc_title: str,
-    plan: str,
-    raw_ideas: List[str],
-    structuring_ideas: List[str],
-    complementary_ideas: List[str],
-    final_summary: str,
-    numeric_sentences: List[str],
-    scored_structuring: List[Dict],
-    scored_complementary: List[Dict]
-) -> str:
-    lines: List[str] = []
-
-    lines.append("TITRE DU DOCUMENT")
-    lines.append(doc_title or "Unknown title")
-    lines.append("")
-
-    if WRITE_DOCUMENT_PLAN:
-        lines.append("PLAN DU DOCUMENT")
-        lines.append(plan)
-        lines.append("")
-
-    if WRITE_ALL_IDEAS:
-        lines.append("ALL EXTRACTED IDEAS")
-        if raw_ideas:
-            for idea in raw_ideas:
-                lines.append(f"- {idea}")
-        else:
-            lines.append("- No extracted idea.")
-        lines.append("")
-
-    lines.append("10 IDEES LES PLUS STRUCTURANTES")
-    if structuring_ideas:
-        for idea in structuring_ideas:
-            lines.append(f"- {idea}")
-    else:
-        lines.append("- No structuring idea.")
-    lines.append("")
-
-    if WRITE_IDEA_SCORES:
-        lines.append("SCORES DE QUALITE DES IDEES STRUCTURANTES")
-        if scored_structuring:
-            lines.append("Légende: I=Importance, S=Specificity, F=Textual grounding")
-            for item in scored_structuring:
-                lines.append(format_scored_idea_line(item))
-        else:
-            lines.append("- No score available.")
-        lines.append("")
-
-    lines.append("10 IDEES COMPLEMENTAIRES IMPORTANTES")
-    if complementary_ideas:
-        for idea in complementary_ideas:
-            lines.append(f"- {idea}")
-    else:
-        lines.append("- No complementary idea.")
-    lines.append("")
-
-    if WRITE_IDEA_SCORES:
-        lines.append("SCORES DE QUALITE DES IDEES COMPLEMENTAIRES")
-        if scored_complementary:
-            lines.append("Légende: I=Importance, S=Specificity, F=Textual grounding")
-            for item in scored_complementary:
-                lines.append(format_scored_idea_line(item))
-        else:
-            lines.append("- No score available.")
-        lines.append("")
-
-    if WRITE_FINAL_SUMMARY:
-        lines.append("SYNTHESE FINALE DES IDEES CLES")
-        lines.append(final_summary if final_summary else "No final summary.")
-        lines.append("")
-
-    if WRITE_NUMERIC_SENTENCES:
-        lines.append("SENTENCES WITH NUMERICAL DATA")
-        if numeric_sentences:
-            for s in numeric_sentences:
-                lines.append(f"- {s}")
-        else:
-            lines.append("- No sentence with numerical data found.")
-        lines.append("")
-
-    return "\n".join(lines).strip()
 
 
 # ============================================================
@@ -1197,22 +921,14 @@ def main() -> None:
         log("Aucun fichier texte trouvé")
         return
 
-    init_output_file()
-
-    first_written = False
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     for txt_path in txt_files:
         try:
-            block = process_document(txt_path)
-
-            if block.strip():
-                append_output(block, add_separator=first_written)
-                first_written = True
-
+            process_document(txt_path)
         except Exception as exc:
             log(f"ERREUR {txt_path.name} : {exc}")
 
-    log(f"Fichier final : {OUTPUT_FILE}")
     log("Fin du script")
 
 
