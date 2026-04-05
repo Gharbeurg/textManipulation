@@ -5,7 +5,7 @@ from datetime import datetime
 import re
 import fitz  # PyMuPDF
 
-PDF_DIR = Path(r"C:/PYTHON/.entree/Sources")
+PDF_DIR = Path(r"C:/PYTHON/.entree/SourcesPDF")
 TXT_DIR_OUT = Path(r"C:/PYTHON/.data/ResultatsPDF")
 
 # Ajustement léger : le programme 1 reste prudent sur les blocs ambigus.

@@ -2,7 +2,7 @@
 
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict
+from typing import List, Dict, Tuple
 import re
 import time
 
@@ -13,7 +13,7 @@ import requests
 # PARAMETRES
 # ============================================================
 
-TXT_DIR = Path(r"C:/PYTHON/.entree/Sources")
+TXT_DIR = Path(r"C:/PYTHON/.entree/SourcesSYNTHESE")
 OUTPUT_DIR = Path(r"C:/PYTHON/.data/ResultatsIdees")
 
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
@@ -26,7 +26,8 @@ MAX_CHUNK_WORDS = 1600
 MIN_CHUNK_WORDS = 350
 
 REQUEST_TIMEOUT = 240
-MAX_NUMERIC_SENTENCES = 200
+MAX_NUMERIC_SENTENCES = 400
+MIN_NUMERIC_SCORE = 1
 
 
 # ============================================================
@@ -41,9 +42,43 @@ def log(label: str) -> None:
 # OUTILS TEXTE
 # ============================================================
 
+SUPERSCRIPT_MAP = str.maketrans({
+    "⁰": "0", "¹": "1", "²": "2", "³": "3", "⁴": "4",
+    "⁵": "5", "⁶": "6", "⁷": "7", "⁸": "8", "⁹": "9",
+    "⁺": "+", "⁻": "-", "⁼": "=",
+    "₀": "0", "₁": "1", "₂": "2", "₃": "3", "₄": "4",
+    "₅": "5", "₆": "6", "₇": "7", "₈": "8", "₉": "9",
+    "₊": "+", "₋": "-", "₌": "=",
+})
+
+def clear_output_directory(directory: Path) -> None:
+    if directory.exists():
+        for file in directory.iterdir():
+            if file.is_file():
+                file.unlink()  # supprime le fichier
+
+def normalize_scientific_notation(text: str) -> str:
+    text = text.translate(SUPERSCRIPT_MAP)
+
+    # 10−7, 10-7, 10+7 => 10^-7 / 10^+7 quand il s'agit clairement d'un exposant collé
+    text = re.sub(r"(?<![A-Za-z0-9])10\s*([-+])\s*(\d{1,3})(?![\d/])", r"10^\1\2", text)
+
+    # 1 × 10-7 => 1 × 10^-7
+    text = re.sub(r"([×x])\s*10\s*([-+])\s*(\d{1,3})(?![\d/])", r"\1 10^\2\3", text)
+
+    # 10 7 seul après x/× est parfois un exposant mal normalisé ; on n'y touche pas sans signe pour éviter les faux positifs
+    return text
+
+
 def normalize_text(text: str) -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = text.replace("\u00a0", " ")
+    text = text.replace("\u2009", " ")
+    text = text.replace("\u202f", " ")
+    text = text.replace("\u2212", "-")   # unicode minus
+    text = text.replace("\u2013", "-")   # en dash
+    text = text.replace("\u2014", "-")   # em dash
+    text = normalize_scientific_notation(text)
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
@@ -478,76 +513,39 @@ def parse_bullet_lines(text: str) -> List[str]:
 NUMBER_PATTERN = re.compile(
     r"""
     (?:
-        \b\d+(?:[.,]\d+)?\s*(?:%|‰)
+        # scientific notation: 1e-3, 2E+6
+        \b\d+(?:[.,]\d+)?[eE][+-]?\d+\b
         |
-        \b\d+(?:[.,]\d+)?\s*(?:percent|percentage points?)\b
+        # powers: 10^5, 10^-12
+        \b\d+(?:[.,]\d+)?\s*\^\s*[+-]?\d+\b
         |
-        \b\d{1,3}(?:[ ,]\d{3})+(?:[.,]\d+)?
+        # times ten: 1 × 10^7, 6 x 10^8
+        \b\d+(?:[.,]\d+)?\s*[×x]\s*10\s*\^\s*[+-]?\d+\b
         |
-        \b\d+(?:[.,]\d+)?
+        # unicode exponent already normalised when possible
+        \b\d+(?:[.,]\d+)?\s*[×x]\s*10\s*[-+]\s*\d+\b
+        |
+        # uncertainty notation: 65.6(1.3)
+        \b\d+(?:[.,]\d+)?\(\d+(?:[.,]\d+)?\)\b
+        |
+        # ± notation
+        \b\d+(?:[.,]\d+)?\s*(?:±|\+/-)\s*\d+(?:[.,]\d+)?\b
+        |
+        # percentages
+        \b\d+(?:[.,]\d+)?\s*(?:%|‰)\b
+        |
+        # ranges: 3-5, 3.2-4.1
+        \b\d+(?:[.,]\d+)?\s*[-]\s*\d+(?:[.,]\d+)?\b
+        |
+        # grouped thousands
+        \b\d{1,3}(?:[ ,]\d{3})+(?:[.,]\d+)?\b
+        |
+        # plain numbers
+        \b\d+(?:[.,]\d+)?\b
     )
     """,
     flags=re.IGNORECASE | re.VERBOSE
 )
-
-USEFUL_QUANT_PATTERNS = [
-    r"\bpercent\b",
-    r"\bpercentage points?\b",
-    r"\bincrease(?:d)?\b",
-    r"\bdecrease(?:d)?\b",
-    r"\bgrowth\b",
-    r"\bdecline\b",
-    r"\breduction\b",
-    r"\bimprov(?:e|ed|ement)\b",
-    r"\baverage\b",
-    r"\btotal\b",
-    r"\bshare\b",
-    r"\brate\b",
-    r"\bmore than\b",
-    r"\bless than\b",
-    r"\bup to\b",
-    r"\bby 20\d{2}\b",
-    r"\bbetween 20\d{2} and 20\d{2}\b",
-    r"\bworkers?\b",
-    r"\bemployees?\b",
-    r"\bcompanies?\b",
-    r"\barticles?\b",
-    r"\bhours?\b",
-    r"\bcalls?\b",
-    r"\bjobs?\b",
-    r"\bskills?\b",
-    r"\boccupations?\b",
-    r"\btraining\b",
-    r"\brevenue\b",
-    r"\bcost\b",
-    r"\bwage\b",
-    r"\bproductivity\b",
-]
-
-NOISE_QUANT_PATTERNS = [
-    r"\bpage\b",
-    r"\bchapter\b",
-    r"\bsection\b",
-    r"\btable\b",
-    r"\bfigure\b",
-    r"\bfig\.\b",
-    r"\bexhibit\b",
-    r"\bnote\b",
-    r"\bappendix\b",
-    r"\bdoi\b",
-    r"\bissn\b",
-    r"\bdownloaded from\b",
-    r"\bcopyright\b",
-    r"\blicense\b",
-    r"\bopen access\b",
-    r"\bjournal\b",
-    r"\bvol(?:ume)?\b",
-    r"\bissue\b",
-    r"https?://",
-    r"\buniversit(y|ies)\b",
-    r"\bdepartment\b",
-    r"\bemail\b",
-]
 
 METADATA_PATTERNS = [
     r"\bdoi\b",
@@ -563,7 +561,6 @@ METADATA_PATTERNS = [
     r"\bissue\b",
     r"\blicense\b",
     r"\bcopyright\b",
-    r"\bcopyright\b",
     r"\bcopyright holder\b",
     r"\bcopyright owner\b",
     r"\bcopyright notice\b",
@@ -577,35 +574,31 @@ MONTHS_PATTERN = re.compile(
     flags=re.IGNORECASE
 )
 
+ABBREVIATIONS_PATTERN = re.compile(
+    r"""
+    \b(
+        fig|figs|eq|eqs|ref|refs|dr|mr|mrs|ms|prof|inc|ltd|jr|sr|vs|no|nos|al
+    )\.
+    """,
+    flags=re.IGNORECASE | re.VERBOSE
+)
+
+
+REFERENCE_ONLY_PREFIX = re.compile(
+    r"""
+    ^\s*(?:
+        \[\d+(?:\s*,\s*\d+)*\]
+        |
+        \d+\.
+        |
+        refs?\.?
+    )\s+
+    """,
+    flags=re.IGNORECASE | re.VERBOSE
+)
 
 def contains_number_data(text: str) -> bool:
     return bool(NUMBER_PATTERN.search(text))
-
-
-def has_useful_quant_marker(text: str) -> bool:
-    low = text.lower()
-    return any(re.search(p, low) for p in USEFUL_QUANT_PATTERNS)
-
-
-def has_noise_quant_marker(text: str) -> bool:
-    low = text.lower()
-    return any(re.search(p, low) for p in NOISE_QUANT_PATTERNS)
-
-
-def split_into_sentences_numeric(text: str) -> List[str]:
-    text = normalize_text(text)
-    text = re.sub(r"\bet al\.", "et al", text, flags=re.IGNORECASE)
-    text = re.sub(r"\be\.g\.", "eg", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bi\.e\.", "ie", text, flags=re.IGNORECASE)
-    parts = re.split(r"(?<=[\.\!\?])\s+(?=[A-ZÀ-ÖØ-Ý0-9])", text)
-    return [p.strip() for p in parts if p.strip()]
-
-
-def clean_numeric_sentence(sentence: str) -> str:
-    sentence = normalize_text(sentence)
-    sentence = re.sub(r"\s+\)", ")", sentence)
-    sentence = re.sub(r"\(\s+", "(", sentence)
-    return sentence.strip(" -•\t")
 
 
 def is_metadata_sentence(sentence: str) -> bool:
@@ -632,13 +625,13 @@ def is_date_only_sentence(sentence: str) -> bool:
 def looks_like_reference_fragment(sentence: str) -> bool:
     low = sentence.lower()
 
-    if ";" in sentence and low.count("(") >= 2:
+    if re.search(r"\bet al\b", low) and "(" in sentence and ")" in sentence:
         return True
 
-    if re.search(r"\b[a-zà-ÿ-]+ et al\b", low):
+    if re.search(r"\b[a-zà-ÿ-]+,\s*[A-Z]\.", sentence):
         return True
 
-    if low.count(",") > 6:
+    if low.count(";") >= 3 and low.count("(") >= 2:
         return True
 
     return False
@@ -647,77 +640,439 @@ def looks_like_reference_fragment(sentence: str) -> bool:
 def looks_like_layout_fragment(text: str) -> bool:
     s = text.strip()
 
-    if len(s) < 35:
+    if not s:
         return True
 
-    if s.count("\n") >= 2:
-        return True
-
-    if re.fullmatch(r"[\d\s,.;:()/%\-]+", s):
+    if re.fullmatch(r"[\d\s,.;:()/%\-+±=×x^]+", s):
         return True
 
     if re.fullmatch(r"\d{1,4}", s):
         return True
 
-    if re.search(r"\b\d+\s*/\s*\d+\b", s):
+    if re.search(r"^\s*page\s+\d+\s*$", s, flags=re.IGNORECASE):
         return True
 
     return False
 
 
-def looks_like_broken_sentence(text: str) -> bool:
+def protect_abbreviations(text: str) -> str:
+    text = re.sub(r"\bet al\.", "et al", text, flags=re.IGNORECASE)
+    text = re.sub(r"\be\.g\.", "eg", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bi\.e\.", "ie", text, flags=re.IGNORECASE)
+    text = ABBREVIATIONS_PATTERN.sub(lambda m: m.group(0).replace(".", "<DOT>"), text)
+    return text
+
+
+def restore_abbreviations(text: str) -> str:
+    return text.replace("<DOT>", ".")
+
+
+def split_into_sentences_numeric(text: str) -> List[str]:
+    text = normalize_text(text)
+    text = protect_abbreviations(text)
+
+    paragraphs = [p.strip() for p in re.split(r"\n{2,}", text) if p.strip()]
+    sentences: List[str] = []
+
+    for para in paragraphs:
+        parts = re.split(
+            r"(?<=[\.\!\?])\s+(?=[A-ZÀ-ÖØ-Ý0-9(\[])|(?<=;)\s+(?=[A-ZÀ-ÖØ-Ý0-9(\[])",
+            para
+        )
+
+        for part in parts:
+            part = restore_abbreviations(part).strip()
+            if part:
+                sentences.append(part)
+
+    return sentences
+
+
+def clean_numeric_sentence(sentence: str) -> str:
+    sentence = normalize_text(sentence)
+    sentence = re.sub(r"\s+\)", ")", sentence)
+    sentence = re.sub(r"\(\s+", "(", sentence)
+    sentence = re.sub(r"\s+", " ", sentence)
+    sentence = sentence.strip(" -•\t;,")
+    sentence = REFERENCE_ONLY_PREFIX.sub("", sentence).strip()
+    return sentence
+
+
+def sentence_seems_incomplete(sentence: str) -> bool:
+    s = sentence.strip()
+
+    if not s:
+        return True
+
+    if re.search(r"[:;,(\[]\s*$", s):
+        return True
+
+    if len(s) < 30:
+        return True
+
+    if s.lower().startswith(("and ", "or ", "but ", "whereas ", "while ", "with ", "including ", "such as ")):
+        return True
+
+    if re.search(r"\b(compared with|respectively|where|which|that|while|whereas|including)\s*$", s.lower()):
+        return True
+
+    return False
+
+
+def sentence_starts_like_continuation(sentence: str) -> bool:
+    s = sentence.strip()
+
+    if not s:
+        return False
+
+    if s[0].islower():
+        return True
+
+    if s.startswith((")", "]", ",", ";", ":", "%")):
+        return True
+
+    if s.lower().startswith(("and ", "or ", "but ", "whereas ", "while ", "with ", "including ", "respectively")):
+        return True
+
+    return False
+
+
+def merge_broken_numeric_sentences(sentences: List[str]) -> List[str]:
+    if not sentences:
+        return []
+
+    merged: List[str] = []
+    i = 0
+
+    while i < len(sentences):
+        current = sentences[i].strip()
+
+        while i + 1 < len(sentences):
+            nxt = sentences[i + 1].strip()
+
+            should_merge = False
+
+            if contains_number_data(current) and sentence_seems_incomplete(current):
+                should_merge = True
+            elif contains_number_data(nxt) and sentence_starts_like_continuation(nxt):
+                should_merge = True
+            elif contains_number_data(current) and contains_number_data(nxt) and len(current) < 45:
+                should_merge = True
+
+            if not should_merge:
+                break
+
+            current = f"{current} {nxt}".strip()
+            i += 1
+
+        merged.append(clean_numeric_sentence(current))
+        i += 1
+
+    return merged
+
+
+def extract_numeric_candidates_from_paragraph(paragraph: str) -> List[str]:
+    raw_sentences = split_into_sentences_numeric(paragraph)
+    merged_sentences = merge_broken_numeric_sentences(raw_sentences)
+
+    kept: List[str] = []
+
+    for sentence in merged_sentences:
+        s = clean_numeric_sentence(sentence)
+
+        if not s:
+            continue
+        if not contains_number_data(s):
+            continue
+        if looks_like_layout_fragment(s):
+            continue
+        if is_metadata_sentence(s):
+            continue
+        if is_date_only_sentence(s):
+            continue
+        if looks_like_reference_fragment(s):
+            continue
+
+        kept.append(s)
+
+    return kept
+
+
+def canonical_numeric_key(text: str) -> str:
+    s = text.lower()
+    s = s.replace("−", "-").replace("–", "-").replace("—", "-")
+    s = re.sub(r"\s+", " ", s)
+    return s.strip()
+
+
+def count_alpha_words(text: str) -> int:
+    return len(re.findall(r"\b[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'-]*\b", text))
+
+
+def count_digits(text: str) -> int:
+    return len(re.findall(r"\d", text))
+
+
+def has_scientific_unit(text: str) -> bool:
+    return bool(re.search(
+        r"""
+        (
+            %|‰|
+            \b(?:k|m|cm|mm|um|µm|nm|pm)\b|
+            \b(?:g|kg|mg|ug|µg)\b|
+            \b(?:s|ms|us|µs|ns|ps|h|hr)\b|
+            \b(?:hz|khz|mhz|ghz)\b|
+            \b(?:ev|kev|mev|gev|tev)\b|
+            \b(?:v|mv|kv|a|ma|ua|µa|w|mw|kw)\b|
+            \b(?:t|mt|kt)\b|
+            \b(?:pa|kpa|mpa|bar|mbar)\b|
+            \b(?:l|ml|ul|µl)\b|
+            \b(?:mol|mmol)\b|
+            \b(?:°c)\b|
+            \b(?:km/h|km h-1|m/s|m s-1|m s-2|kg/m3|g/cm3|mev/c|mev/c2|kev/c|ppb|ppt|ppm|p\.p\.b\.|p\.p\.t\.|p\.p\.m\.)\b
+        )
+        """,
+        text,
+        flags=re.IGNORECASE | re.VERBOSE
+    ))
+
+
+def has_measurement_pattern(text: str) -> bool:
+    return bool(re.search(
+        r"""
+        (
+            \b\d+(?:[.,]\d+)?\s*(?:±|\+/-)\s*\d+(?:[.,]\d+)?\b
+            |
+            \b\d+(?:[.,]\d+)?\(\d+(?:[.,]\d+)?\)\b
+            |
+            \b\d+(?:[.,]\d+)?\s*[×x]\s*10\s*\^\s*[+-]?\d+\b
+            |
+            \b10\s*\^\s*[+-]?\d+\b
+            |
+            \b\d+(?:[.,]\d+)?[eE][+-]?\d+\b
+        )
+        """,
+        text,
+        flags=re.IGNORECASE | re.VERBOSE
+    ))
+
+
+def has_action_verb(text: str) -> bool:
+    return bool(re.search(
+        r"""
+        \b(
+            is|are|was|were|be|been|being|
+            has|have|had|
+            shows|showed|shown|
+            found|finds|reported|measured|observed|
+            increased|decreased|improved|reduced|
+            reached|yielded|gave|obtained|transported|
+            consumed|lasted|remained|corresponded|
+            produced|generated|detected|achieved|
+            provide|provides|provided|allow|allows|allowed
+        )\b
+        """,
+        text,
+        flags=re.IGNORECASE | re.VERBOSE
+    ))
+
+
+def starts_like_reference_entry(text: str) -> bool:
+    s = text.strip()
+    return bool(re.match(r"^\d+\.\s+[A-Z][a-zA-Z-]+", s))
+
+
+def looks_like_journal_reference(text: str) -> bool:
+    s = text.strip()
+
+    if re.search(r"\bet al\b", s, flags=re.IGNORECASE) and re.search(r"\(\d{4}\)", s):
+        return True
+
+    if re.search(r"\bNature\b|\bScience\b|\bPhys\.\s*Rev\.?\b|\bRev\.\s*Mod\.\s*Phys\.?\b|\bLett\.?\b", s):
+        if re.search(r"\(\d{4}\)", s) or re.search(r"\b\d+\s*,\s*\d+\s*-\s*\d+\b", s):
+            return True
+
+    if re.search(r"\b\d+\s*,\s*\d+\s*-\s*\d+\s*\(\d{4}\)", s):
+        return True
+
+    return False
+
+
+def looks_like_figure_caption(text: str) -> bool:
+    s = text.strip()
+
+    if re.match(r"^(figure|fig\.?|figs\.?|table|extended data fig\.?|extended data table)\s*\d+[a-z]?\b",
+                s, flags=re.IGNORECASE):
+        return True
+
+    if s.lower().startswith("figure:"):
+        return True
+
+    return False
+
+
+def looks_like_axis_or_table_fragment(text: str) -> bool:
     s = text.strip()
 
     if s.count("|") >= 2:
         return True
 
-    if s.count(" - ") >= 3:
+    if re.search(r"\b(temperature|acceleration|time|counts?|frequency|signal|intensity|voltage|current|amplitude|number of protons)\s*\([^)]+\)",
+                 s, flags=re.IGNORECASE):
         return True
 
-    if not re.search(
-        r"\b(is|are|was|were|be|been|has|have|had|shows|showed|found|finds|reported|grew|rose|fell|cut|reduced|increased|improved|yielded|accounted|represented|reached|dropped)\b",
-        s.lower()
-    ):
-        if not (re.search(r"%|percent|percentage points?", s.lower()) and has_useful_quant_marker(s)):
+    if re.fullmatch(r"[A-Za-z ()/%.\-+]+\s+[A-Za-z ()/%.\-+]+\s+[A-Za-z ()/%.\-+]+", s):
+        if count_digits(s) == 0:
             return True
+
+    if re.search(r"\b-?\d+(?:\.\d+)?\s+-?\d+(?:\.\d+)?\s+-?\d+(?:\.\d+)?\b", s) and count_alpha_words(s) <= 8:
+        return True
 
     return False
 
 
-def score_numeric_sentence(sentence: str) -> int:
+def looks_like_page_counter(text: str) -> bool:
+    s = text.strip()
+
+    if re.fullmatch(r"\d+\s+of\s+\d+", s, flags=re.IGNORECASE):
+        return True
+
+    if re.search(r"\b\d+\s+of\s+\d+\b", s, flags=re.IGNORECASE):
+        return True
+
+    if re.fullmatch(r"page\s+\d+(\s+of\s+\d+)?", s, flags=re.IGNORECASE):
+        return True
+
+    return False
+
+
+def looks_like_numbered_section_title(text: str) -> bool:
+    s = text.strip()
+
+    if len(s) > 140:
+        return False
+
+    if re.match(r"^\d+(\.\d+){1,3}\s+[A-Z]", s):
+        return True
+
+    if re.match(r"^(section|subsection|appendix|supplementary|extended data)\b", s, flags=re.IGNORECASE):
+        return True
+
+    return False
+
+
+def is_fragment_too_short(text: str) -> bool:
+    s = text.strip()
+    words = count_alpha_words(s)
+
+    if words >= 7:
+        return False
+
+    if has_scientific_unit(s) or has_measurement_pattern(s):
+        return False
+
+    if words <= 4:
+        return True
+
+    return False
+
+
+def numeric_sentence_quality_score(sentence: str) -> int:
     s = sentence.strip()
     low = s.lower()
     score = 0
 
-    if re.search(r"%|percent|percentage points?", low):
-        score += 3
-
-    if re.search(r"\b(increase|increased|decrease|decreased|growth|decline|reduction|improved|improvement|rose|fell|cut|dropped|yielded|reached)\b", low):
-        score += 3
-
-    if re.search(r"\b(workers|employees|companies|articles|hours|calls|jobs|skills|occupations|revenue|cost|wage|productivity)\b", low):
+    # Signaux positifs
+    if len(s) >= 60:
         score += 2
-
-    if re.search(r"\b(by 20\d{2}|between 20\d{2} and 20\d{2})\b", low):
+    elif len(s) >= 35:
         score += 1
 
-    if has_noise_quant_marker(s):
+    if count_alpha_words(s) >= 10:
+        score += 2
+    elif count_alpha_words(s) >= 6:
+        score += 1
+
+    if has_scientific_unit(s):
+        score += 3
+
+    if has_measurement_pattern(s):
+        score += 3
+
+    if has_action_verb(s):
+        score += 2
+
+    if "," in s and count_alpha_words(s) >= 8:
+        score += 1
+
+    if re.search(r"\b(compared with|respectively|corresponding to|resulted in|consistent with|better than|precision of|factor of)\b", low):
+        score += 1
+
+    # Signaux négatifs
+    if looks_like_page_counter(s):
+        score -= 8
+
+    if looks_like_figure_caption(s):
+        score -= 7
+
+    if looks_like_journal_reference(s):
+        score -= 7
+
+    if starts_like_reference_entry(s):
+        score -= 6
+
+    if looks_like_numbered_section_title(s):
+        score -= 5
+
+    if looks_like_axis_or_table_fragment(s):
+        score -= 5
+
+    if looks_like_reference_fragment(s):
         score -= 4
 
     if looks_like_layout_fragment(s):
         score -= 4
 
-    if looks_like_broken_sentence(s):
+    if is_fragment_too_short(s):
+        score -= 4
+
+    alpha_chars = len(re.findall(r"[A-Za-zÀ-ÿ]", s))
+    digit_chars = len(re.findall(r"\d", s))
+    if alpha_chars < 10 and digit_chars >= 3:
+        score -= 4
+
+    if s.count(";") >= 2:
+        score -= 2
+
+    if s.count(",") >= 5 and count_alpha_words(s) <= 8:
         score -= 3
 
     return score
 
 
-def extract_numeric_sentences(text: str) -> List[str]:
-    log("Extraction des phrases avec données chiffrées")
+def deduplicate_numeric_sentences_keep_order(items: List[Tuple[str, int]]) -> List[str]:
+    best_by_key: Dict[str, Tuple[str, int, int]] = {}
 
-    sentences = split_into_sentences_numeric(text)
-    kept: List[Dict] = []
+    for idx, (sentence, score) in enumerate(items):
+        key = canonical_numeric_key(sentence)
+        current = best_by_key.get(key)
+
+        if current is None:
+            best_by_key[key] = (sentence, score, idx)
+            continue
+
+        current_sentence, current_score, current_idx = current
+        if score > current_score:
+            best_by_key[key] = (sentence, score, current_idx)
+        elif score == current_score and len(sentence) > len(current_sentence):
+            best_by_key[key] = (sentence, score, current_idx)
+
+    ordered = sorted(best_by_key.values(), key=lambda x: x[2])
+    return [x[0] for x in ordered]
+
+
+def post_clean_numeric_sentences(sentences: List[str]) -> List[str]:
+    kept: List[Tuple[str, int]] = []
 
     for sentence in sentences:
         s = clean_numeric_sentence(sentence)
@@ -730,31 +1085,78 @@ def extract_numeric_sentences(text: str) -> List[str]:
             continue
         if is_date_only_sentence(s):
             continue
-        if looks_like_reference_fragment(s):
-            continue
-        if not has_useful_quant_marker(s):
-            continue
 
-        score = score_numeric_sentence(s)
-        if score < 2:
+        score = numeric_sentence_quality_score(s)
+
+        if score < MIN_NUMERIC_SCORE:
             continue
 
-        kept.append({
-            "sentence": s,
-            "score": score
-        })
+        kept.append((s, score))
 
-    best_by_key: Dict[str, Dict] = {}
-    for item in kept:
-        key = re.sub(r"\s+", " ", item["sentence"].strip()).lower()
-        current = best_by_key.get(key)
-        if current is None or item["score"] > current["score"]:
-            best_by_key[key] = item
+    return deduplicate_numeric_sentences_keep_order(kept)
 
-    deduped = list(best_by_key.values())
-    deduped.sort(key=lambda x: (x["score"], len(x["sentence"])), reverse=True)
 
-    return [x["sentence"] for x in deduped[:MAX_NUMERIC_SENTENCES]]
+def paragraph_has_substantial_numeric_sentence(para: str, collected: List[str]) -> bool:
+    para_key = canonical_numeric_key(para)
+    for sent in collected:
+        if len(sent) < 25:
+            continue
+        if canonical_numeric_key(sent) in para_key:
+            return True
+    return False
+
+
+def extract_numeric_sentences(text: str) -> List[str]:
+    log("Extraction robuste des phrases avec données chiffrées")
+
+    text = normalize_text(text)
+    paragraphs = [p.strip() for p in re.split(r"\n{2,}", text) if p.strip()]
+
+    collected: List[str] = []
+
+    # Passe 1 : extraction large par paragraphe
+    for para in paragraphs:
+        if not contains_number_data(para):
+            continue
+
+        candidates = extract_numeric_candidates_from_paragraph(para)
+        collected.extend(candidates)
+
+    # Passe 2 : contrôle de rappel limité aux paragraphes sans vraie phrase retenue
+    fallback_collected: List[str] = []
+
+    for para in paragraphs:
+        if not contains_number_data(para):
+            continue
+
+        if paragraph_has_substantial_numeric_sentence(para, collected):
+            continue
+
+        lines = [clean_numeric_sentence(x) for x in para.split("\n") if x.strip()]
+        for line in lines:
+            if not contains_number_data(line):
+                continue
+            if looks_like_layout_fragment(line):
+                continue
+            if is_metadata_sentence(line):
+                continue
+            if is_date_only_sentence(line):
+                continue
+            if looks_like_page_counter(line):
+                continue
+            if looks_like_figure_caption(line):
+                continue
+            if looks_like_journal_reference(line):
+                continue
+
+            fallback_collected.append(line)
+
+    all_sentences = collected + fallback_collected
+
+    # Passe 3 : nettoyage + score en gardant l'ordre du document
+    cleaned = post_clean_numeric_sentences(all_sentences)
+
+    return cleaned[:MAX_NUMERIC_SENTENCES]
 
 
 # ============================================================
@@ -888,6 +1290,7 @@ def process_document(txt_path: Path) -> None:
 
     # Extraction chiffres
     numeric_sentences = extract_numeric_sentences(text)
+    log(f"Nombre de phrases chiffrées extraites : {len(numeric_sentences)}")
 
     # Ecriture fichier de sortie
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -922,6 +1325,8 @@ def main() -> None:
         return
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    clear_output_directory(OUTPUT_DIR)
+    log("Répertoire de sortie vidé")
 
     for txt_path in txt_files:
         try:
