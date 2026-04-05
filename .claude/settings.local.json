@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p \"C:/PYTHON/Programmes/textManipulation/text_tagging/models\")",
+      "Bash(mkdir -p \"C:/PYTHON/Programmes/textManipulation/text_tagging/services\")",
+      "Bash(mkdir -p \"C:/PYTHON/Programmes/textManipulation/text_tagging/utils\")"
+    ]
+  }
+}
