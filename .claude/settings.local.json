@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wc -l \"C:\\\\PYTHON\\\\.entree\\\\SourcesHTM\\\\Bronchopneumopathie chronique obstructive \\(BPCO\\) · Inserm, La science pour la santé.html\")",
+      "Bash(head -220 \"C:\\\\PYTHON\\\\.entree\\\\SourcesHTM\\\\Bronchopneumopathie chronique obstructive \\(BPCO\\) · Inserm, La science pour la santé.html\")",
+      "Bash(wc -c \"C:\\\\PYTHON\\\\.entree\\\\SourcesHTM\\\\Bronchopneumopathie chronique obstructive \\(BPCO\\) · Inserm, La science pour la santé.html\")",
+      "Bash(python3:*)"
+    ]
+  }
+}
