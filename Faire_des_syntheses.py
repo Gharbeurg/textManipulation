@@ -84,6 +84,38 @@ def normalize_text(text: str) -> str:
     return text.strip()
 
 
+def strip_markdown_syntax(text: str) -> str:
+    """Retire la syntaxe Markdown des lignes de contenu (hors titres) en préservant les marqueurs # des titres."""
+    lines = text.splitlines()
+    result = []
+    for line in lines:
+        stripped = line.strip()
+        # Conserver les lignes de titre telles quelles
+        if re.match(r"^#{1,6}\s", stripped):
+            result.append(line)
+            continue
+        # Supprimer les lignes séparateurs de tableaux : |---|---|
+        if re.match(r"^\|[-| :]+\|$", stripped):
+            continue
+        # Images : ![alt](url)
+        line = re.sub(r"!\[[^\]]*\]\([^\)]*\)", "", line)
+        # Liens : [texte](url) → texte
+        line = re.sub(r"\[([^\]]+)\]\([^\)]*\)", r"\1", line)
+        # Gras+italique : ***texte*** ou ___texte___
+        line = re.sub(r"\*{3}(.+?)\*{3}", r"\1", line)
+        line = re.sub(r"_{3}(.+?)_{3}", r"\1", line)
+        # Gras : **texte** ou __texte__
+        line = re.sub(r"\*{2}(.+?)\*{2}", r"\1", line)
+        line = re.sub(r"_{2}(.+?)_{2}", r"\1", line)
+        # Italique : *texte* ou _texte_
+        line = re.sub(r"\*([^*\n]+?)\*", r"\1", line)
+        line = re.sub(r"_([^_\n]+?)_", r"\1", line)
+        # Code inline : `code`
+        line = re.sub(r"`([^`]+)`", r"\1", line)
+        result.append(line)
+    return "\n".join(result)
+
+
 def word_count(text: str) -> int:
     return len(re.findall(r"\b\w+\b", text))
 
@@ -166,99 +198,72 @@ def ollama_generate(prompt: str, temperature: float = 0.2, num_predict: int = 12
 # ============================================================
 
 def parse_structured_text(text: str) -> Dict:
+    """Parse un fichier Markdown propre : # ou ## = titre, ## Abstract = résumé,
+    ## Section = section, ### Sous-section = sous-section."""
     lines = [line.rstrip() for line in text.splitlines()]
 
     title = ""
     abstract_parts: List[str] = []
-    keywords = ""
     sections: List[Dict] = []
 
     current_section = None
     current_subsection = None
-    current_mode = "body"
-
-    def ensure_section_if_needed():
-        nonlocal current_section, sections
-        if current_section is None:
-            current_section = {
-                "title": "Untitled section",
-                "subsections": [],
-                "content": []
-            }
-            sections.append(current_section)
+    in_abstract = False
 
     for raw_line in lines:
         line = raw_line.strip()
         if not line:
             continue
 
-        if line.startswith("TITLE: "):
-            if not title:
-                title = line.replace("TITLE: ", "", 1).strip()
-            continue
-
-        if line == "ABSTRACT":
-            current_mode = "abstract"
-            continue
-
-        if line == "KEYWORDS":
-            current_mode = "keywords"
-            continue
-
-        if line.startswith("SECTION: "):
-            current_mode = "body"
+        h_match = re.match(r"^(#{1,6})\s+(.*)", line)
+        if h_match:
+            level = len(h_match.group(1))
+            heading_text = h_match.group(2).strip()
+            in_abstract = False
             current_subsection = None
-            current_section = {
-                "title": line.replace("SECTION: ", "", 1).strip(),
-                "subsections": [],
-                "content": []
-            }
-            sections.append(current_section)
-            continue
 
-        if line.startswith("SUBSECTION: "):
-            current_mode = "body"
-            ensure_section_if_needed()
-            current_subsection = {
-                "title": line.replace("SUBSECTION: ", "", 1).strip(),
-                "content": []
-            }
-            current_section["subsections"].append(current_subsection)
-            continue
+            if not title:
+                title = heading_text
+                continue
 
-        if line.startswith("TABLE: "):
-            table_line = line.replace("TABLE: ", "", 1).strip()
-            ensure_section_if_needed()
-            if current_subsection is not None:
-                current_subsection["content"].append(f"[TABLE] {table_line}")
+            if heading_text.lower() in ("abstract", "résumé", "summary"):
+                in_abstract = True
+                continue
+
+            if level <= 2:
+                current_section = {
+                    "title": heading_text,
+                    "subsections": [],
+                    "content": []
+                }
+                sections.append(current_section)
             else:
-                current_section["content"].append(f"[TABLE] {table_line}")
+                if current_section is None:
+                    current_section = {
+                        "title": "Untitled section",
+                        "subsections": [],
+                        "content": []
+                    }
+                    sections.append(current_section)
+                current_subsection = {
+                    "title": heading_text,
+                    "content": []
+                }
+                current_section["subsections"].append(current_subsection)
             continue
 
-        if line.startswith("FIGURE: "):
-            figure_line = line.replace("FIGURE: ", "", 1).strip()
-            ensure_section_if_needed()
-            if current_subsection is not None:
-                current_subsection["content"].append(f"[FIGURE] {figure_line}")
-            else:
-                current_section["content"].append(f"[FIGURE] {figure_line}")
-            continue
-
-        if current_mode == "abstract":
+        if in_abstract:
             abstract_parts.append(line)
-        elif current_mode == "keywords":
-            keywords = (keywords + " " + line).strip()
-        else:
-            ensure_section_if_needed()
+        elif current_section is not None:
             if current_subsection is not None:
                 current_subsection["content"].append(line)
             else:
                 current_section["content"].append(line)
 
     return {
-        "title": title.strip(),
+        "title": title,
         "abstract": normalize_text("\n".join(abstract_parts)),
-        "keywords": normalize_text(keywords),
+        "keywords": "",
         "sections": sections
     }
 
@@ -1242,6 +1247,7 @@ def process_document(txt_path: Path) -> None:
     log(f"Début traitement : {txt_path.name}")
 
     text = txt_path.read_text(encoding="utf-8", errors="ignore")
+    text = strip_markdown_syntax(text)
     text = normalize_text(text)
 
     doc = parse_structured_text(text)
@@ -1317,11 +1323,11 @@ def main() -> None:
     if not TXT_DIR.exists():
         raise FileNotFoundError(f"Répertoire introuvable : {TXT_DIR}")
 
-    txt_files = sorted(TXT_DIR.glob("*.txt"))
-    log(f"Nombre de fichiers texte trouvés : {len(txt_files)}")
+    txt_files = sorted(TXT_DIR.glob("*.md"))
+    log(f"Nombre de fichiers Markdown trouvés : {len(txt_files)}")
 
     if not txt_files:
-        log("Aucun fichier texte trouvé")
+        log("Aucun fichier Markdown trouvé")
         return
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
