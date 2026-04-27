@@ -3,7 +3,7 @@ from pathlib import Path
 
 # === PARAMÈTRE ===
 # Répertoire contenant les fichiers texte
-repertoire = Path(r"C:/PYTHON/.data/ResultatsIdees")
+repertoire = Path(r"C:/PYTHON/.data/ResultatsMarkdown")
 
 # Nom du fichier de sortie
 fichier_sortie = os.path.join(repertoire, "concatene.txt")

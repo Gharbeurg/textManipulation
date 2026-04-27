@@ -26,7 +26,7 @@ SUPPORTED_EXTENSIONS = {
     # Images (Docling applique OCR + layout)
     ".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".gif", ".webp",
     # Web / texte structuré
-    ".html", ".htm",
+    ".html", ".htm", ".mhtml",
     ".md",
     ".adoc", ".asciidoc",
     ".csv",
