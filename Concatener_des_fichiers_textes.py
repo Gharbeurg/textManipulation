@@ -6,7 +6,7 @@ from pathlib import Path
 repertoire = Path(r"C:/PYTHON/.data/ResultatsMarkdown")
 
 # Nom du fichier de sortie
-fichier_sortie = os.path.join(repertoire, "concatene.txt")
+fichier_sortie = os.path.join(repertoire, "concatene.md")
 
 # Ligne de séparation entre les fichiers
 separateur = "\n" + "="*50 + "\n"
