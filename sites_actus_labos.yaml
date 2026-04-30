@@ -1,0 +1,141 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# sites_actus_labos.yaml — liste des sites à crawler
+#
+# Paramètres disponibles par site :
+#
+#   name                  : libellé affiché dans la console (optionnel)
+#   start_urls            : liste d'URLs de départ (obligatoire)
+#   article_url_pattern   : regex sur l'URL — si match → page considérée comme
+#                           article (remplace les heuristiques HTML)
+#   date_selector         : sélecteur CSS pour trouver l'élément contenant la date
+#   date_regex            : regex pour extraire la date du texte trouvé
+#                           (si absent, utilise le format défini dans defaults)
+#   date_format           : format strptime pour parser la date (ex. "%d/%m/%Y")
+#                           (si absent, utilise le format défini dans defaults)
+#   disable_nav_filter    : true pour désactiver le filtre qui exclut les liens
+#                           dans nav/header/aside/footer — utile si les articles
+#                           sont listés dans des conteneurs non-sémantiques
+#
+# Si article_url_pattern est absent → fallback sur les heuristiques HTML
+# (JSON-LD, OpenGraph, balises <article>, <time>…)
+#
+# Si date_selector / date_regex sont absents → le crawler scanne le texte
+# complet de la page avec le regex global défini dans defaults ci-dessous.
+# ─────────────────────────────────────────────────────────────────────────────
+
+defaults:
+  date_regex:  '(\d{2}/\d{2}/20\d{2})'   # format commun à tous les sites FR
+  date_format: '%d/%m/%Y'
+
+sites:
+
+  - name: Académie nationale de médecine
+    start_urls:
+      - https://www.academie-medecine.fr/category/travaux-et-publications/actualites/
+    # Article = URL avec un seul segment de chemin à la racine du domaine
+    # (les pages de catégorie ont plusieurs segments : /category/travaux-et-publications/…)
+    article_url_pattern: 'academie-medecine\.fr/[^/?#]+/?$'
+    # Date au format "Publié le 14 avril 2026" — pas de DD/MM/YYYY sur ce site
+    date_regex: '\d{1,2}\s+\w+\s+20\d{2}'
+    # Liens d'articles potentiellement dans des conteneurs non-sémantiques
+    disable_nav_filter: true
+
+  - name: Ameli Médecins
+    start_urls:
+      - https://www.ameli.fr/medecin/actualites
+    # Article = URL de type /medecin/actualites/titre
+    article_url_pattern: 'ameli\.fr/medecin/actualites/[^/?#]+'
+    # Liens d'articles dans des conteneurs non-sémantiques sur ce site
+    disable_nav_filter: true
+
+  - name: Ameli Pharmaciens
+    start_urls:
+      - https://www.ameli.fr/pharmacien/actualites
+    # Article = URL de type /pharmacien/actualites/titre
+    article_url_pattern: 'ameli\.fr/pharmacien/actualites/[^/?#]+'
+    disable_nav_filter: true
+
+  - name: Amgen France
+    start_urls:
+      - https://www.amgen.fr/actualites
+    # Article = URL de type /actualites/YYYY/MM/titre
+    article_url_pattern: 'amgen\.fr/actualites/\d{4}/\d{2}/[^/?#]+'
+    # Pas de date_regex nécessaire : l'année est extraite directement depuis l'URL
+
+  - name: ANSM
+    start_urls:
+      - https://ansm.sante.fr/actualites/
+    # Article = URL de type /actualites/titre-de-l-article
+    article_url_pattern: 'ansm\.sante\.fr/actualites/[^/?#]+'
+
+  - name: Egora
+    start_urls:
+      - https://www.egora.fr/actus-pro
+      - https://www.egora.fr/medical
+    # Article = URL avec exactement 3 segments de chemin, toutes sections confondues
+    # (ex: /actus-pro/categorie/titre  ou  /medical/actus-medicales/titre)
+    article_url_pattern: 'egora\.fr/[^/]+/[^/]+/[^/?#]+'
+
+  - name: HAS - Haute Autorité de Santé
+    start_urls:
+      - https://www.has-sante.fr/jcms/fc_2874902/fr/actualite
+    # Article = URL de type /jcms/p_[ID]/fr/titre
+    # (la page catégorie a un préfixe fc_, les articles ont p_)
+    article_url_pattern: 'has-sante\.fr/jcms/p_\d+/fr/[^/?#]+'
+
+  - name: JIM - Journal International de Médecine
+    start_urls:
+      - https://www.jim.fr
+    # ⚠ Ce site requiert une connexion Medscape SSO.
+    # Au démarrage, connectez-vous manuellement dans le navigateur,
+    # puis le crawler poursuivra avec la session authentifiée.
+    # Article = URL de type /viewarticle/titre-2026a1000xxx
+    article_url_pattern: 'jim\.fr/viewarticle/[^/?#]+'
+    # L'année est extraite depuis le slug URL (ex: "2026a1000ais")
+    # grâce au fallback \b(20\d{2}) ajouté dans extract_article_year
+
+  - name: Le Quotidien du Médecin
+    start_urls:
+      - https://www.lequotidiendumedecin.fr
+    # Article = URL avec 3 segments de chemin : /rubrique/sous-rubrique/titre
+    article_url_pattern: 'lequotidiendumedecin\.fr/[^/]+/[^/]+/[^/?#]+'
+
+  - name: La Revue du Praticien
+    start_urls:
+      - https://www.larevuedupraticien.fr/l-actu
+    # Article = URL de type /article/titre
+    article_url_pattern: 'larevuedupraticien\.fr/article/[^/?#]+'
+    # Date au format "Publié le 27 Avril 2026" (texte littéral, pas DD/MM/YYYY)
+    date_regex: '\d{1,2}\s+\w+\s+20\d{2}'
+
+  - name: Medscape Français
+    start_urls:
+      - https://francais.medscape.com/actualites
+    # Article = URL de type /viewarticle/titre-article
+    article_url_pattern: 'francais\.medscape\.com/viewarticle/[^/?#]+'
+
+  - name: Ministère de la Santé
+    start_urls:
+      - https://sante.gouv.fr/actualites-presse/actualites-du-ministere/
+      - https://sante.gouv.fr/actualites-presse/presse/communiques-de-presse/
+    # Article = URL contenant /article/ dans le chemin
+    article_url_pattern: 'sante\.gouv\.fr/actualites-presse/.+/article/[^/?#]+'
+    # Format de date non vérifiable (CAPTCHA) — fallback DD/MM/YYYY du defaults
+    # + extraction depuis le slug si l'année y figure (ex: "…2026-dans-le-domaine…")
+    disable_nav_filter: true
+
+  - name: Pharmaceutiques
+    start_urls:
+      - https://pharmaceutiques.com/actualites/
+    # Article = URL de type /actualites/categorie/titre
+    article_url_pattern: 'pharmaceutiques\.com/actualites/[^/]+/[^/?#]+'
+    # Format texte : "16 Avr 2026" — le format "23/04/2026" est couvert par le defaults
+    date_regex: '\d{1,2}\s+\w+\s+20\d{2}'
+
+  - name: Prescrire - Santé et société
+    start_urls:
+      - https://www.prescrire.org/rubrique-sante-et-societe
+    # Article = URL de type /section/[numero]-titre  (ex: /sante-et-societe/506-titre)
+    article_url_pattern: 'prescrire\.org/[^/]+/\d+-[^/?#]+'
+    # Date au format "Décembre 2025" — mois en toutes lettres + année
+    date_regex: '(?:janvier|f[eé]vrier|mars|avril|mai|juin|juillet|ao[uû]t|septembre|octobre|novembre|d[eé]cembre)\s+20\d{2}'

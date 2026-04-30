@@ -13,7 +13,7 @@ separateur = "\n" + "="*50 + "\n"
 
 def concatener_fichiers_txt(repertoire, fichier_sortie):
     # Liste des fichiers .txt
-    fichiers = [f for f in os.listdir(repertoire) if f.endswith(".txt")]
+    fichiers = [f for f in os.listdir(repertoire) if f.endswith(".md")]
 
     # Trier les fichiers (optionnel mais utile)
     fichiers.sort()
