@@ -8,7 +8,7 @@ from datetime import datetime
 # PARAMETRES
 # =========================
 
-SOURCE_DIR  = "C:/PYTHON/.entree/SourcesSYNTHESE"   # Répertoire source des fichiers .md
+SOURCE_DIR  = "C:/PYTHON/.data/ResultatsMarkdown"   # Répertoire source des fichiers .md
 OUTPUT_DIR  = "C:/PYTHON/.data/ResultatsIdees"       # Répertoire de sortie (vidé au démarrage)
 
 # MODEL_NAME  = "qwen2.5:14b"

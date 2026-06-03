@@ -2,20 +2,38 @@ import os
 from pathlib import Path
 
 # === PARAMÈTRE ===
-# Répertoire contenant les fichiers texte
+# Répertoire contenant les fichiers Markdown
 repertoire = Path(r"C:/PYTHON/.data/ResultatsMarkdown")
 
 # Nom du fichier de sortie
 fichier_sortie = os.path.join(repertoire, "concatene.md")
 
 # Ligne de séparation entre les fichiers
-separateur = "\n" + "="*50 + "\n"
+separateur = "\n" + "=" * 50 + "\n"
+
+
+def supprimer_fichier_sortie_si_existe(fichier_sortie):
+    """
+    Supprime le fichier de sortie s'il existe déjà.
+    Cela évite de le reprendre dans la concaténation.
+    """
+    if os.path.exists(fichier_sortie):
+        os.remove(fichier_sortie)
+        print(f"Ancien fichier supprimé : {fichier_sortie}")
+
 
 def concatener_fichiers_txt(repertoire, fichier_sortie):
-    # Liste des fichiers .txt
+    # Supprimer le fichier de sortie s'il existe déjà
+    supprimer_fichier_sortie_si_existe(fichier_sortie)
+
+    # Liste des fichiers .md
     fichiers = [f for f in os.listdir(repertoire) if f.endswith(".md")]
 
-    # Trier les fichiers (optionnel mais utile)
+    # Exclure explicitement le fichier de sortie de la liste, par sécurité
+    nom_fichier_sortie = os.path.basename(fichier_sortie)
+    fichiers = [f for f in fichiers if f != nom_fichier_sortie]
+
+    # Trier les fichiers
     fichiers.sort()
 
     with open(fichier_sortie, "w", encoding="utf-8") as sortie:
@@ -33,6 +51,7 @@ def concatener_fichiers_txt(repertoire, fichier_sortie):
                 sortie.write(separateur)
 
     print(f"Fichier généré : {fichier_sortie}")
+
 
 # Exécution
 concatener_fichiers_txt(repertoire, fichier_sortie)

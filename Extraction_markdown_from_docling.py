@@ -21,7 +21,7 @@ import os
 # PARAMÈTRES PRINCIPAUX
 # -----------------------------------------------------------------------------
 
-INPUT_DIR = Path(r"C:/PYTHON/.entree/SourcesDocs")
+INPUT_DIR = Path(r"C:/PYTHON/.data/resultatscrawling")
 OUTPUT_DIR = Path(r"C:/PYTHON/.data/ResultatsMarkdown")
 
 # Répertoire unique où l'on veut stocker et réutiliser les modèles Docling/RapidOCR.
