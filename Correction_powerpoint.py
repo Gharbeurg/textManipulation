@@ -106,6 +106,13 @@ EXCLUDED_MESSAGE_KEYWORDS_EN = {
     "simpler wording",
 }
 
+# Remplacement automatique des polices.
+# Les comparaisons ne tiennent pas compte des majuscules/minuscules.
+FONT_REPLACEMENTS = {
+    "calibri": "Aptos",
+    "calibri light": "Aptos Light",
+}
+
 # Types de problèmes LanguageTool considérés comme suffisamment sûrs.
 ALLOWED_ISSUE_TYPES = {
     "misspelling",
@@ -213,6 +220,7 @@ class FileStatistics:
     protected_corrections: int = 0
     style_corrections_ignored: int = 0
     corrections_without_suggestion: int = 0
+    fonts_replaced: int = 0
     errors: int = 0
     status: str = "PENDING"
     skip_reason: str = ""
@@ -1162,7 +1170,42 @@ def rebuild_paragraph_with_styles(
 
 
 # =============================================================================
-# 12. TRAITEMENT AVEC PYTHON-PPTX
+# 12. CORRECTION DES POLICES
+# =============================================================================
+
+def replace_run_font(run: Any) -> bool:
+    """Remplace Calibri par Aptos et Calibri Light par Aptos Light."""
+    current_font = safe_getattr(run.font, "name", None)
+
+    if not current_font:
+        return False
+
+    replacement = FONT_REPLACEMENTS.get(str(current_font).strip().casefold())
+
+    if replacement is None or replacement == current_font:
+        return False
+
+    run.font.name = replacement
+    return True
+
+
+def replace_paragraph_fonts(
+    paragraph: Any,
+    statistics: FileStatistics,
+) -> bool:
+    """Corrige les polices explicitement définies dans les runs du paragraphe."""
+    changed = False
+
+    for run in paragraph.runs:
+        if replace_run_font(run):
+            statistics.fonts_replaced += 1
+            changed = True
+
+    return changed
+
+
+# =============================================================================
+# 13. TRAITEMENT AVEC PYTHON-PPTX
 # =============================================================================
 
 def display_correction(
@@ -1185,6 +1228,11 @@ def process_paragraph(
     protected_terms: list[str],
     statistics: FileStatistics,
 ) -> bool:
+    font_changed = replace_paragraph_fonts(
+        paragraph=paragraph,
+        statistics=statistics,
+    )
+
     (
         original_text,
         styles,
@@ -1192,7 +1240,7 @@ def process_paragraph(
     ) = build_character_style_map(paragraph)
 
     if not original_text.strip():
-        return False
+        return font_changed
 
     correction = correct_text(
         original_text,
@@ -1208,7 +1256,7 @@ def process_paragraph(
     )
 
     if not correction.changed:
-        return False
+        return font_changed
 
     rebuild_paragraph_with_styles(
         paragraph=paragraph,
@@ -1402,7 +1450,7 @@ def process_presentation(
             presentation.save(str(temporary_file))
 
 # =============================================================================
-# 13. VALIDATION ET REMPLACEMENT SÉCURISÉ
+# 14. VALIDATION ET REMPLACEMENT SÉCURISÉ
 # =============================================================================
 
 def validate_corrected_pptx(file_path: Path) -> tuple[bool, str]:
@@ -1446,7 +1494,7 @@ def safely_replace_original(
 
 
 # =============================================================================
-# 14. AFFICHAGE DES RÉSULTATS
+# 15. AFFICHAGE DES RÉSULTATS
 # =============================================================================
 
 def display_file_summary(statistics: FileStatistics) -> None:
@@ -1477,6 +1525,7 @@ def display_file_summary(statistics: FileStatistics) -> None:
         "Suggestions sans remplacement : "
         f"{statistics.corrections_without_suggestion}"
     )
+    print(f"Polices remplacées : {statistics.fonts_replaced}")
     print(f"Erreurs : {statistics.errors}")
     print(f"Statut : {statistics.status}")
 
@@ -1498,6 +1547,9 @@ def display_final_summary(all_statistics: list[FileStatistics]) -> None:
     total_ignored = sum(
         item.corrections_ignored for item in all_statistics
     )
+    total_fonts_replaced = sum(
+        item.fonts_replaced for item in all_statistics
+    )
 
     print()
     print("=" * 60)
@@ -1510,11 +1562,12 @@ def display_final_summary(all_statistics: list[FileStatistics]) -> None:
     print(f"Fichiers en erreur : {failed}")
     print(f"Corrections appliquées : {total_applied}")
     print(f"Corrections ignorées : {total_ignored}")
+    print(f"Polices remplacées : {total_fonts_replaced}")
     print("=" * 60)
 
 
 # =============================================================================
-# 15. TRAITEMENT D'UN FICHIER
+# 16. TRAITEMENT D'UN FICHIER
 # =============================================================================
 
 def process_powerpoint_file(
@@ -1598,7 +1651,10 @@ def process_powerpoint_file(
                     f"{validation_error}"
                 )
 
-            if statistics.corrections_applied > 0:
+            if (
+                statistics.corrections_applied > 0
+                or statistics.fonts_replaced > 0
+            ):
                 safely_replace_original(
                     temporary_file=temporary_file,
                     original_file=file_path,
@@ -1634,7 +1690,7 @@ def process_powerpoint_file(
 
 
 # =============================================================================
-# 16. PROGRAMME PRINCIPAL
+# 17. PROGRAMME PRINCIPAL
 # =============================================================================
 
 def main() -> int:
