@@ -1,57 +1,110 @@
 import os
+import re
 from pathlib import Path
 
-# === PARAMÈTRE ===
-# Répertoire contenant les fichiers Markdown
+
+# === PARAMÈTRES ===
+
 repertoire = Path(r"C:/PYTHON/.data/ResultatsMarkdown")
 
-# Nom du fichier de sortie
-fichier_sortie = os.path.join(repertoire, "concatene.md")
+fichier_sortie = os.path.join(repertoire, "concatene.html")
 
-# Ligne de séparation entre les fichiers
 separateur = "\n" + "=" * 50 + "\n"
 
 
-def supprimer_fichier_sortie_si_existe(fichier_sortie):
+def extraire_numero(nom_fichier):
     """
-    Supprime le fichier de sortie s'il existe déjà.
-    Cela évite de le reprendre dans la concaténation.
+    Extrait le dernier nombre présent avant l'extension du fichier.
+
+    Exemples :
+    - monfichier-2.md  -> 2
+    - monfichier-10.md -> 10
+
+    Les fichiers sans numéro sont placés à la fin.
     """
-    if os.path.exists(fichier_sortie):
-        os.remove(fichier_sortie)
-        print(f"Ancien fichier supprimé : {fichier_sortie}")
+    match = re.search(r"(\d+)(?=\.[^.]+$)", nom_fichier)
+
+    if match:
+        return int(match.group(1))
+
+    return float("inf")
 
 
-def concatener_fichiers_txt(repertoire, fichier_sortie):
-    # Supprimer le fichier de sortie s'il existe déjà
-    supprimer_fichier_sortie_si_existe(fichier_sortie)
+def lire_fichier_texte(chemin_fichier):
+    """
+    Lit un fichier en essayant plusieurs encodages courants.
+    """
+    encodages = [
+        "utf-8",
+        "utf-8-sig",
+        "utf-16",
+        "cp1252",
+        "latin-1",
+    ]
 
-    # Liste des fichiers .md
-    fichiers = [f for f in os.listdir(repertoire) if f.endswith(".md")]
+    for encodage in encodages:
+        try:
+            with open(chemin_fichier, "r", encoding=encodage) as fichier:
+                contenu = fichier.read()
 
-    # Exclure explicitement le fichier de sortie de la liste, par sécurité
-    nom_fichier_sortie = os.path.basename(fichier_sortie)
-    fichiers = [f for f in fichiers if f != nom_fichier_sortie]
+            print(
+                f"Encodage de {os.path.basename(chemin_fichier)} : "
+                f"{encodage}"
+            )
 
-    # Trier les fichiers
-    fichiers.sort()
+            return contenu
 
-    with open(fichier_sortie, "w", encoding="utf-8") as sortie:
+        except UnicodeDecodeError:
+            continue
+
+    raise UnicodeError(
+        f"Impossible de lire le fichier : {chemin_fichier}"
+    )
+
+
+def concatener_fichiers_md(repertoire, fichier_sortie):
+    repertoire = Path(repertoire)
+
+    if not repertoire.exists():
+        raise FileNotFoundError(
+            f"Le répertoire n'existe pas : {repertoire}"
+        )
+
+    fichiers = [
+        fichier
+        for fichier in os.listdir(repertoire)
+        if fichier.lower().endswith(".html")
+    ]
+
+    fichiers = sorted(fichiers, key=extraire_numero)
+
+    if not fichiers:
+        print("Aucun fichier Markdown trouvé.")
+        return
+
+    print("Ordre de concaténation :")
+
+    for fichier in fichiers:
+        print(f" - {fichier}")
+
+    with open(
+        fichier_sortie,
+        "w",
+        encoding="utf-8",
+        newline="\n",
+    ) as sortie:
+
         for i, fichier in enumerate(fichiers):
-            chemin_fichier = os.path.join(repertoire, fichier)
+            chemin_fichier = repertoire / fichier
 
-            with open(chemin_fichier, "r", encoding="utf-8") as f:
-                contenu = f.read()
+            contenu = lire_fichier_texte(chemin_fichier)
 
-            # Écriture du contenu
             sortie.write(contenu)
 
-            # Ajouter séparateur sauf après le dernier fichier
             if i < len(fichiers) - 1:
                 sortie.write(separateur)
 
-    print(f"Fichier généré : {fichier_sortie}")
+    print(f"\nFichier généré : {fichier_sortie}")
 
 
-# Exécution
-concatener_fichiers_txt(repertoire, fichier_sortie)
+concatener_fichiers_md(repertoire, fichier_sortie)
