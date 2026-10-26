@@ -205,6 +205,9 @@ LETTER_PATTERN = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ]")
 # python-pptx représente généralement un saut de ligne manuel par \x0b.
 SOFT_LINE_BREAK = "\x0b"
 
+# Les lignes de références bibliographiques ne doivent pas être modifiées.
+SOURCE_LINE_PATTERN = re.compile(r"^\s*Source\s*:", re.IGNORECASE)
+
 
 # =============================================================================
 # 3. STRUCTURES DE DONNÉES
@@ -826,6 +829,9 @@ def _correct_text_segment(
         corrected_text=text,
     )
 
+    if SOURCE_LINE_PATTERN.match(text):
+        return result
+
     if not text.strip() or not LETTER_PATTERN.search(text):
         return result
 
@@ -1228,6 +1234,13 @@ def process_paragraph(
     protected_terms: list[str],
     statistics: FileStatistics,
 ) -> bool:
+    # Ne pas modifier non plus la police d’une ligne entièrement consacrée
+    # à une source. Les paragraphes multilignes restent traités ligne par ligne.
+    if SOURCE_LINE_PATTERN.match(paragraph.text or "") and not re.search(
+        r"[\x0b\n]", paragraph.text or ""
+    ):
+        return False
+
     font_changed = replace_paragraph_fonts(
         paragraph=paragraph,
         statistics=statistics,
@@ -1737,5 +1750,40 @@ def main() -> int:
         close_language_tools(language_tools)
 
 
+class TerminalAndFile:
+    """Recopie chaque écriture du terminal dans le journal, sans la modifier."""
+
+    def __init__(self, terminal: Any, log_file: Any) -> None:
+        self.terminal = terminal
+        self.log_file = log_file
+
+    def write(self, text: str) -> int:
+        self.terminal.write(text)
+        self.log_file.write(text)
+        self.log_file.flush()
+        return len(text)
+
+    def flush(self) -> None:
+        self.terminal.flush()
+        self.log_file.flush()
+
+    def __getattr__(self, attribute: str) -> Any:
+        return getattr(self.terminal, attribute)
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    # Le journal contient uniquement les sorties du terminal de cette exécution.
+    # Il est créé à côté des fichiers PowerPoint et écrasé à chaque lancement.
+    if POWERPOINT_DIRECTORY.is_dir():
+        journal_path = POWERPOINT_DIRECTORY / "Correction_powerpoint.log"
+        with journal_path.open("w", encoding="utf-8", newline="") as journal:
+            original_stdout, original_stderr = sys.stdout, sys.stderr
+            sys.stdout = TerminalAndFile(original_stdout, journal)
+            sys.stderr = TerminalAndFile(original_stderr, journal)
+            try:
+                exit_code = main()
+            finally:
+                sys.stdout, sys.stderr = original_stdout, original_stderr
+        sys.exit(exit_code)
+    else:
+        sys.exit(main())
