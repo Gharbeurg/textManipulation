@@ -3,13 +3,14 @@ import requests
 import shutil
 from pathlib import Path
 from datetime import datetime
+from config import DATA
 
 # =========================
 # PARAMETRES
 # =========================
 
-SOURCE_DIR  = "C:/PYTHON/.data/ResultatsMarkdown"   # Répertoire source des fichiers .md
-OUTPUT_DIR  = "C:/PYTHON/.data/ResultatsIdees"       # Répertoire de sortie (vidé au démarrage)
+SOURCE_DIR  = str(DATA / "ResultatsMarkdown")   # Répertoire source des fichiers .md
+OUTPUT_DIR  = str(DATA / "ResultatsIdees")       # Répertoire de sortie (vidé au démarrage)
 
 # MODEL_NAME  = "qwen2.5:14b"
 MODEL_NAME  = "qwen3.5:latest"                             # Modèle Ollama

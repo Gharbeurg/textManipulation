@@ -38,6 +38,8 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
+from config import ENTREE, PARAMS
+
 import language_tool_python
 from langdetect import DetectorFactory, LangDetectException, detect
 from pptx import Presentation
@@ -49,10 +51,10 @@ from pptx.enum.shapes import MSO_SHAPE_TYPE
 # =============================================================================
 
 # Répertoire contenant les fichiers .pptx à corriger.
-POWERPOINT_DIRECTORY = Path(r"C:\PYTHON\.entree\SourcesPowerpoint")
+POWERPOINT_DIRECTORY = ENTREE / "SourcesPowerpoint"
 
 # Fichier contenant un mot ou une expression protégée par ligne.
-PROTECTED_WORDS_FILE = Path(r"C:\PYTHON\.params\mots_proteges.txt")
+PROTECTED_WORDS_FILE = PARAMS / "mots_proteges.txt"
 
 # Détection de langue.
 LANGUAGE_DETECTION_SLIDES = 3

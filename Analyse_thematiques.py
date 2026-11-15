@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from config import PARAMS, DATA
 from typing import List, Tuple
 
 import pandas as pd
@@ -28,8 +29,8 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 
 
 # ========= PARAMÈTRES À MODIFIER =========
-INPUT_FILE = Path(r"C:/PYTHON/.params/entree.txt")
-OUTPUT_DIR = Path(r"C:/PYTHON/.data/sorties_thematiques.txt")
+INPUT_FILE = PARAMS / "entree.txt"
+OUTPUT_DIR = DATA / "sorties_thematiques.txt"
 
 NB_TOPICS = 8                 # ex: 5, 8, 12 (plus grand = sujets plus fins)
 TOP_WORDS_PER_TOPIC = 12      # nb de mots-clés affichés par sujet

@@ -2,10 +2,12 @@ import os
 import re
 from pathlib import Path
 
+from config import DATA
+
 
 # === PARAMÈTRES ===
 
-repertoire = Path(r"C:/PYTHON/.data/ResultatsMarkdown")
+repertoire = DATA / "ResultatsMarkdown"
 
 fichier_sortie = os.path.join(repertoire, "concatene.html")
 

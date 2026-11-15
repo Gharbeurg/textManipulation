@@ -12,6 +12,7 @@ Objectif de cette version :
 """
 
 from pathlib import Path
+from config import ENTREE, DATA, PARAMS
 from datetime import datetime
 import logging
 import os
@@ -21,11 +22,11 @@ import os
 # PARAMÈTRES PRINCIPAUX
 # -----------------------------------------------------------------------------
 
-INPUT_DIR = Path(r"C:/PYTHON/.entree/SourcesDocs")
-OUTPUT_DIR = Path(r"C:/PYTHON/.data/ResultatsMarkdown")
+INPUT_DIR = ENTREE / "SourcesDocs"
+OUTPUT_DIR = DATA / "ResultatsMarkdown"
 
 # Répertoire unique où l'on veut stocker et réutiliser les modèles Docling/RapidOCR.
-MODELS_DIR = Path(r"C:/PYTHON/.params/.models-doclings")
+MODELS_DIR = PARAMS / ".models-doclings"
 
 # Noms des modèles RapidOCR vus dans tes logs.
 # Les fichiers doivent être copiés dans MODELS_DIR.

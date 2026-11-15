@@ -1,10 +1,11 @@
 # Bibliothèques
 import re, string
 from datetime import datetime
+from config import PARAMS, DATA
 
 # Variables
-fichier_entree = "C:/PYTHON/.params/entree.txt"
-fichier_sortie = "C:/PYTHON/.data/entree.txt"
+fichier_entree = PARAMS / "entree.txt"
+fichier_sortie = DATA / "entree.txt"
 lignes_max_par_fichier = 2000000
 fileNumber = 1
 

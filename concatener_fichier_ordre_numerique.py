@@ -1,10 +1,11 @@
 import os
 import re
 from pathlib import Path
+from config import DATA
 
 # === PARAMÈTRE ===
 # Répertoire contenant les fichiers texte
-repertoire = Path(r"C:/PYTHON/.data/ResultatsMarkdown")
+repertoire = DATA / "ResultatsMarkdown"
 
 # Nom du fichier de sortie
 fichier_sortie = os.path.join(repertoire, "concatene.txt")

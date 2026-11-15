@@ -8,10 +8,12 @@ from pathlib import Path
 from typing import List
 from datetime import datetime
 
+from config import PARAMS, DATA
+
 # Variables fichiers entrée / sortie
 # variables
-fichier_entree = "C:/PYTHON/.params/entree.txt"
-fichier_sortie = "C:/PYTHON/.data/entree_ss_doublon.txt"
+fichier_entree = PARAMS / "entree.txt"
+fichier_sortie = DATA / "entree_ss_doublon.txt"
 
 # URL simple (http/https)
 URL_RE = re.compile(r"https?://[^\s]+")

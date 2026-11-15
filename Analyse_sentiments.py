@@ -5,10 +5,10 @@ nltk.download('punkt')
 
 from nltk.sentiment import SentimentIntensityAnalyzer
 from nltk.tokenize import sent_tokenize
-from pathlib import Path
+from config import PARAMS
 
 # variables
-INPUT_FILE = Path("C:/PYTHON/.params/entree.txt")
+INPUT_FILE = PARAMS / "entree.txt"
 
 def lire_fichier(chemin):
     """

@@ -10,25 +10,23 @@ Programme d'extraction de lignes et de colonnes depuis un fichier CSV
     colonne (séparées par des virgules, combinées en OU), et combinaison
     en ET entre les différentes colonnes filtrées.
 
-Chemins (codés en dur) :
-  - CSV source     : C:\\PYTHON\\.entree\\BasesMedicales\\declarations.csv
-  - Colonnes       : C:\\PYTHON\\.entree\\BasesMedicales\\transparence_colonnes.txt
-  - Critères       : C:\\PYTHON\\.entree\\BasesMedicales\\transparence_criteres.txt
-  - CSV résultat   : C:\\PYTHON\\.data\\resultat_transparence.csv
+Chemins : définis par la configuration commune config.py (ENTREE, DATA).
 """
 
 import csv
 import re
 import unicodedata
 
+from config import ENTREE, DATA
+
 
 # ---------------------------------------------------------------------------
 # Configuration - chemins des fichiers
 # ---------------------------------------------------------------------------
-FICHIER_CSV_SOURCE = r"C:\PYTHON\.entree\BasesMedicales\declarations.csv"
-FICHIER_COLONNES = r"C:\PYTHON\.entree\BasesMedicales\transparence_colonnes.txt"
-FICHIER_CRITERES = r"C:\PYTHON\.entree\BasesMedicales\transparence_criteres.txt"
-FICHIER_RESULTAT = r"C:\PYTHON\.data\resultat_transparence.csv"
+FICHIER_CSV_SOURCE = ENTREE / "BasesMedicales" / "declarations.csv"
+FICHIER_COLONNES = ENTREE / "BasesMedicales" / "transparence_colonnes.txt"
+FICHIER_CRITERES = ENTREE / "BasesMedicales" / "transparence_criteres.txt"
+FICHIER_RESULTAT = DATA / "resultat_transparence.csv"
 
 SEPARATEUR_CSV = ";"
 ENCODAGE = "utf-8"

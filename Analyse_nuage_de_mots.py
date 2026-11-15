@@ -11,6 +11,7 @@ pip install wordcloud pillow numpy matplotlib
 """
 
 from pathlib import Path
+from config import PARAMS
 import re
 
 import numpy as np
@@ -23,8 +24,8 @@ import matplotlib.pyplot as plt
 # PARAMÈTRES À MODIFIER ICI
 # ============================================================
 
-INPUT_FILE = "C:/PYTHON/.params/entree.txt"
-OUTPUT_FILE = "C:/PYTHON/.params/nuage_mots.png"
+INPUT_FILE = PARAMS / "entree.txt"
+OUTPUT_FILE = PARAMS / "nuage_mots.png"
 
 FORME = "carre"          # "carre", "rond", "ovale", "none"
 LARGEUR = 1200

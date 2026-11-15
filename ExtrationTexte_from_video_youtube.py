@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import re
-from pathlib import Path
+from config import DATA
 
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api._errors import (
@@ -53,7 +53,7 @@ def fetched_transcript_to_text(fetched_transcript) -> str:
 def main() -> int:
     # ====== VARIABLES ======
     YOUTUBE_URL = "https://www.youtube.com/watch?v=GJAQCRJZmic"
-    OUTPUT_FILE = Path("C:/PYTHON/.data/youtube.txt")
+    OUTPUT_FILE = DATA / "youtube.txt"
     LANGS = ["fr", "en"]  # ordre de préférence
     # =======================
 

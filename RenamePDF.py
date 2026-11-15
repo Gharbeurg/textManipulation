@@ -8,6 +8,8 @@ from pathlib import Path
 import fitz  # PyMuPDF
 import requests
 
+from config import ENTREE
+
 # supprime les avertissement de MuPDF, qui sont nombreux et pas pertinents pour notre usage 
 try:
     fitz.TOOLS.mupdf_display_errors(False)
@@ -20,7 +22,7 @@ except Exception:
 # PARAMÈTRES PRINCIPAUX
 # ============================================================
 
-PDF_DIRECTORY = Path("C:/PYTHON/.entree/SourcesDocs")
+PDF_DIRECTORY = ENTREE / "SourcesDocs"
 
 # True  = simulation, aucun fichier renommé
 # False = renommage réel
