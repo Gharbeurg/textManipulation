@@ -37,7 +37,6 @@ RAPIDOCR_REC_MODEL = MODELS_DIR / "ch_PP-OCRv4_rec_infer.pth"
 # Elle indique à Docling où chercher ses modèles et artefacts locaux.
 os.environ["DOCLING_ARTIFACTS_PATH"] = str(MODELS_DIR)
 
-
 from docling.document_converter import DocumentConverter  # noqa: E402
 
 try:
@@ -151,6 +150,7 @@ def build_converter() -> DocumentConverter:
         ocr_options=ocr_options,
     )
     pipeline_options.do_ocr = True
+    pipeline_options.do_table_structure = False
 
     return DocumentConverter(
         format_options={
