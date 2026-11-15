@@ -3,3 +3,5 @@ __pycache__/
 *.pyc
 .env
 .claude/worktrees/
+# Configuration commune locale
+/config.py
